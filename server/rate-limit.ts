@@ -129,3 +129,18 @@ export function recordToolsShareSuccess(uid: string) {
   recordRateLimitHit('toolsShare', uid, REPORT_WINDOW_MS);
 }
 
+// /api/corrections: 20 sends per day per uid
+export const rateLimitCorrections = createUidRateLimiter({
+  bucketPrefix: 'corrections',
+  maxRequests: 20,
+  windowMs: REPORT_WINDOW_MS,
+  incrementOnCheck: false,
+  message:
+    "You've reached the daily limit of 20 guide mismatch notes to Nic.",
+});
+
+export function recordCorrectionSendSuccess(uid: string) {
+  recordRateLimitHit('corrections', uid, REPORT_WINDOW_MS);
+}
+
+

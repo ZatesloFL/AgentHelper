@@ -7,6 +7,7 @@ import {
   ProgressSummaryPayload,
   ToolsProfilePayload,
   UserProjectPayload,
+  LatestAuditPayload,
 } from './knowledge.js';
 import { getProductById } from './products.js';
 import { toolDeclarations, executeServerTool } from './tools.js';
@@ -364,6 +365,7 @@ export async function handleTextChat(payload: {
   sessionNotes?: string[];
   toolsProfile?: ToolsProfilePayload | null;
   userProjects?: UserProjectPayload[] | null;
+  latestAudit?: LatestAuditPayload | null;
 }): Promise<{
   reply: string;
   toolInvocations?: Array<{ name: string; args: any; result: any }>;
@@ -378,6 +380,7 @@ export async function handleTextChat(payload: {
     sessionNotes = [],
     toolsProfile = null,
     userProjects = null,
+    latestAudit = null,
   } = payload;
 
   const systemInstruction = buildSystemInstruction(userName, product, {
@@ -386,6 +389,7 @@ export async function handleTextChat(payload: {
     routineState,
     toolsProfile,
     userProjects,
+    latestAudit,
   });
 
   // Input caps: at most the last 60 messages, each truncated to 4,000 characters
@@ -519,6 +523,8 @@ export async function handleTextChat(payload: {
     const launchTool = toolInvocations.find(t => t.name === 'launch_app');
     const escalateTool = toolInvocations.find(t => t.name === 'escalate_to_owner');
     const contractTool = toolInvocations.find(t => t.name === 'save_task_contract');
+    const auditTool = toolInvocations.find(t => t.name === 'record_audit_result');
+    const mismatchTool = toolInvocations.find(t => t.name === 'report_knowledge_mismatch');
     const toolsProfileTool = toolInvocations.find(t => t.name === 'update_tools_profile');
     const noteSavedSucceeded = toolInvocations.some(
       t => t.name === 'save_session_note' && t.result?.saved === true
@@ -545,6 +551,9 @@ export async function handleTextChat(payload: {
       } else {
         textReply = `All steps in this routine are now complete!`;
       }
+    } else if (auditTool) {
+      const { area, rating, reason } = auditTool.result || {};
+      textReply = `I've recorded ${area || 'that area'} as ${rating || 'checked'}${reason ? `: ${reason}` : '.'}`;
     } else if (launchTool) {
       const appId = launchTool.args?.app_id;
       const apps = getGuidedApps(product);
@@ -554,6 +563,8 @@ export async function handleTextChat(payload: {
       textReply = `I've opened the roadmap for ${app?.title || 'your routine'}. Let's take it one step at a time:\n\n${step1Inquiry}`;
     } else if (toolsProfileTool) {
       textReply = `I've updated your tools profile with that information.`;
+    } else if (mismatchTool) {
+      textReply = `Thanks for pointing that out—I'll follow what's on your screen rather than my notes.`;
     } else if (toolInvocations.some(t => t.name === 'get_booking_link')) {
       textReply = `Here is Nic's direct booking link below.`;
     } else if (toolInvocations.some(t => t.name === 'request_screenshare')) {

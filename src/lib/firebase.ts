@@ -175,6 +175,44 @@ export interface StoredContractCard {
   saved?: boolean;
 }
 
+export const AUDIT_AREAS = [
+  'connections',
+  'approvals',
+  'scheduled',
+  'memory',
+  'activity',
+  'privacy',
+  'money',
+] as const;
+
+export type AuditArea = (typeof AUDIT_AREAS)[number];
+export type AuditRating = 'green' | 'amber' | 'red';
+
+export interface AuditAreaResult {
+  rating: AuditRating;
+  reason: string;
+}
+
+export interface AuditRunDoc {
+  id: string;
+  appId: string;
+  startedAt: string;
+  completedAt: string | null;
+  results: Partial<Record<AuditArea, AuditAreaResult>>;
+  fixList?: string[];
+}
+
+export interface StoredScorecardCard {
+  auditId: string;
+  appId: string;
+  title: string;
+  startedAt?: string;
+  completedAt: string;
+  results: Partial<Record<AuditArea, AuditAreaResult>>;
+  previousResults?: Partial<Record<AuditArea, AuditAreaResult>> | null;
+  fixList: string[];
+}
+
 export interface StoredMessage {
   id: string;
   role: 'user' | 'guide' | 'system';
@@ -189,6 +227,7 @@ export interface StoredMessage {
     sentRefId?: string;
   };
   contractCard?: StoredContractCard;
+  scorecardCard?: StoredScorecardCard;
   bookingUrl?: string;
 }
 
@@ -360,6 +399,52 @@ function sanitizeMessageForFirestore(m: any): StoredMessage {
     clean.contractCard = cc;
   }
 
+  if (m?.scorecardCard && typeof m.scorecardCard === 'object') {
+    const cleanResults: Partial<Record<AuditArea, AuditAreaResult>> = {};
+    const rawRes = m.scorecardCard.results || {};
+    for (const area of AUDIT_AREAS) {
+      const entry = rawRes[area];
+      if (entry && (entry.rating === 'green' || entry.rating === 'amber' || entry.rating === 'red')) {
+        cleanResults[area] = {
+          rating: entry.rating,
+          reason: String(entry.reason || '').slice(0, 500),
+        };
+      }
+    }
+
+    let cleanPrev: Partial<Record<AuditArea, AuditAreaResult>> | undefined = undefined;
+    if (m.scorecardCard.previousResults && typeof m.scorecardCard.previousResults === 'object') {
+      cleanPrev = {};
+      for (const area of AUDIT_AREAS) {
+        const entry = m.scorecardCard.previousResults[area];
+        if (entry && (entry.rating === 'green' || entry.rating === 'amber' || entry.rating === 'red')) {
+          cleanPrev[area] = {
+            rating: entry.rating,
+            reason: String(entry.reason || '').slice(0, 500),
+          };
+        }
+      }
+    }
+
+    const sc: StoredScorecardCard = {
+      auditId: String(m.scorecardCard.auditId || '').trim(),
+      appId: String(m.scorecardCard.appId || 'safety-audit').trim(),
+      title: String(m.scorecardCard.title || 'Check-up Scorecard').trim(),
+      completedAt: toIsoString(m.scorecardCard.completedAt),
+      results: cleanResults,
+      fixList: Array.isArray(m.scorecardCard.fixList)
+        ? m.scorecardCard.fixList.map((f: any) => String(f || '').trim()).filter(Boolean).slice(0, 3)
+        : [],
+    };
+    if (m.scorecardCard.startedAt) {
+      sc.startedAt = toIsoString(m.scorecardCard.startedAt);
+    }
+    if (cleanPrev) {
+      sc.previousResults = cleanPrev;
+    }
+    clean.scorecardCard = sc;
+  }
+
   if (typeof m?.bookingUrl === 'string' && m.bookingUrl) {
     clean.bookingUrl = m.bookingUrl;
   }
@@ -473,6 +558,50 @@ export async function saveUserConsent(uid: string): Promise<void> {
   } catch (err) {
     console.warn('Could not save consent to Firestore:', err);
   }
+}
+
+/**
+ * Corrections loop opt-in setting (off by default):
+ * "Help improve the guide: when my screen doesn't match the guide's notes, send a text-only note to Nic (no name, email, or images)."
+ */
+export async function getUserCorrectionsOptIn(uid: string): Promise<boolean> {
+  if (!uid) return false;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+      const data = snap.data();
+      if (typeof data?.shareCorrectionsWithNic === 'boolean') {
+        try {
+          localStorage.setItem(`corrections_opt_in_${uid}`, String(data.shareCorrectionsWithNic));
+        } catch (_) {}
+        return data.shareCorrectionsWithNic;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read corrections opt-in from Firestore:', err);
+  }
+  return localStorage.getItem(`corrections_opt_in_${uid}`) === 'true';
+}
+
+export async function saveUserCorrectionsOptIn(uid: string, enabled: boolean): Promise<boolean> {
+  if (!uid) return false;
+  const val = Boolean(enabled);
+  try {
+    localStorage.setItem(`corrections_opt_in_${uid}`, String(val));
+  } catch (_) {}
+
+  try {
+    await setDoc(
+      doc(db, 'users', uid),
+      {
+        shareCorrectionsWithNic: val,
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Could not save corrections opt-in to Firestore:', err);
+  }
+  return val;
 }
 
 /**
@@ -1319,7 +1448,124 @@ export async function deleteUserProject(uid: string, projectId: string): Promise
 }
 
 /**
- * Removes all localStorage keys starting with conv_, latest_conv_, progress_, notes_, routines_, tools_profile_, projects_ for a given uid.
+ * Check-up audits persistence at users/{uid}/audits/{auditId}:
+ * { appId, startedAt, completedAt, results: { [area]: { rating, reason } }, fixList? }
+ */
+function sanitizeAuditDoc(auditId: string, d: any): AuditRunDoc {
+  const appId = typeof d?.appId === 'string' && d.appId.trim() ? d.appId.trim() : 'safety-audit';
+  const startedAt = toIsoString(d?.startedAt || d?.completedAt);
+  const completedAt = d?.completedAt ? toIsoString(d.completedAt) : null;
+  const results: Partial<Record<AuditArea, AuditAreaResult>> = {};
+  if (d?.results && typeof d.results === 'object') {
+    for (const area of AUDIT_AREAS) {
+      const entry = d.results[area];
+      if (entry && (entry.rating === 'green' || entry.rating === 'amber' || entry.rating === 'red')) {
+        results[area] = {
+          rating: entry.rating,
+          reason: typeof entry.reason === 'string' ? entry.reason.trim().slice(0, 500) : '',
+        };
+      }
+    }
+  }
+  const fixList = Array.isArray(d?.fixList)
+    ? d.fixList.map((f: any) => String(f || '').trim()).filter(Boolean).slice(0, 3)
+    : undefined;
+
+  return {
+    id: auditId,
+    appId,
+    startedAt,
+    completedAt,
+    results,
+    fixList,
+  };
+}
+
+export async function getUserAudits(uid: string): Promise<AuditRunDoc[]> {
+  if (!uid) return [];
+  let list: AuditRunDoc[] = [];
+
+  try {
+    const raw = localStorage.getItem(`audits_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        list = parsed.map((a: any) => sanitizeAuditDoc(String(a?.id || `audit-${Date.now()}`), a));
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const colRef = collection(db, 'users', uid, 'audits');
+    const snap = await getDocs(colRef);
+    const fresh: AuditRunDoc[] = [];
+    snap.forEach(docSnap => {
+      fresh.push(sanitizeAuditDoc(docSnap.id, docSnap.data()));
+    });
+    fresh.sort((a, b) => {
+      const tA = new Date(a.completedAt || a.startedAt).getTime();
+      const tB = new Date(b.completedAt || b.startedAt).getTime();
+      return tB - tA;
+    });
+    try {
+      localStorage.setItem(`audits_${uid}`, JSON.stringify(fresh));
+    } catch (_) {}
+    return fresh;
+  } catch (err) {
+    console.warn('Error fetching user audits from Firestore:', err);
+  }
+
+  list.sort((a, b) => {
+    const tA = new Date(a.completedAt || a.startedAt).getTime();
+    const tB = new Date(b.completedAt || b.startedAt).getTime();
+    return tB - tA;
+  });
+  return list;
+}
+
+export async function saveUserAuditDoc(
+  uid: string,
+  auditIdOrDoc: string | AuditRunDoc,
+  maybeData?: Omit<AuditRunDoc, 'id'>
+): Promise<AuditRunDoc> {
+  const rawObj =
+    typeof auditIdOrDoc === 'string'
+      ? { id: auditIdOrDoc, ...(maybeData || {}) }
+      : auditIdOrDoc;
+  const cleanId = String(rawObj.id || '').trim() || `audit-${Date.now()}`;
+  const cleanDoc = sanitizeAuditDoc(cleanId, rawObj);
+
+  if (uid) {
+    try {
+      const raw = localStorage.getItem(`audits_${uid}`);
+      const existing: AuditRunDoc[] = raw ? JSON.parse(raw) : [];
+      const filtered = existing.filter(a => a.id !== cleanId);
+      filtered.unshift(cleanDoc);
+      localStorage.setItem(`audits_${uid}`, JSON.stringify(filtered.slice(0, 50)));
+    } catch (_) {}
+
+    const payload: Record<string, any> = {
+      appId: cleanDoc.appId,
+      startedAt: cleanDoc.startedAt,
+      completedAt: cleanDoc.completedAt,
+      results: cleanDoc.results,
+    };
+    if (cleanDoc.fixList && cleanDoc.fixList.length > 0) {
+      payload.fixList = cleanDoc.fixList;
+    }
+
+    try {
+      await setDoc(doc(db, 'users', uid, 'audits', cleanId), payload, { merge: true });
+    } catch (err) {
+      console.warn(`Error saving audit ${cleanId} to Firestore:`, err);
+    }
+  }
+
+  return cleanDoc;
+}
+
+/**
+ * Removes all localStorage keys starting with conv_, latest_conv_, progress_, notes_, routines_, tools_profile_, projects_, audits_, corrections_opt_in_ for a given uid.
  */
 export function clearUserLocalStorage(uid: string): void {
   if (!uid) return;
@@ -1336,7 +1582,9 @@ export function clearUserLocalStorage(uid: string): void {
           k === `routines_${uid}` ||
           k.startsWith(`routines_${uid}_`) ||
           k === `tools_profile_${uid}` ||
-          k === `projects_${uid}`)
+          k === `projects_${uid}` ||
+          k === `audits_${uid}` ||
+          k === `corrections_opt_in_${uid}`)
       ) {
         keysToRemove.push(k);
       }
@@ -1346,7 +1594,7 @@ export function clearUserLocalStorage(uid: string): void {
 }
 
 /**
- * Deletes all history for a user: conversations, progress summaries, session notes, routine progress, tools profile, and projects.
+ * Deletes all history for a user: conversations, progress summaries, session notes, routine progress, tools profile, projects, and audits.
  */
 export async function deleteAllUserHistory(uid: string): Promise<void> {
   if (!uid) return;
@@ -1354,7 +1602,15 @@ export async function deleteAllUserHistory(uid: string): Promise<void> {
   clearUserLocalStorage(uid);
 
   try {
-    const subcollections = ['conversations', 'progress', 'notes', 'routines', 'profile', 'projects'];
+    const subcollections = [
+      'conversations',
+      'progress',
+      'notes',
+      'routines',
+      'profile',
+      'projects',
+      'audits',
+    ];
     for (const sub of subcollections) {
       const colRef = collection(db, 'users', uid, sub);
       const snap = await getDocs(colRef);

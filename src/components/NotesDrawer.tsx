@@ -30,6 +30,8 @@ interface NotesDrawerProps {
   onLoadConversation?: (conversationId: string) => Promise<StoredConversation | null>;
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onDeleteAllHistory: () => Promise<void>;
+  shareCorrectionsWithNic?: boolean;
+  onToggleShareCorrections?: (enabled: boolean) => Promise<void> | void;
 }
 
 export const NotesDrawer: React.FC<NotesDrawerProps> = ({
@@ -47,6 +49,8 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
   onLoadConversation,
   onDeleteConversation,
   onDeleteAllHistory,
+  shareCorrectionsWithNic = false,
+  onToggleShareCorrections,
 }) => {
   const [isEditingSummary, setIsEditingSummary] = useState<boolean>(false);
   const [summaryDraft, setSummaryDraft] = useState<string>('');
@@ -498,6 +502,30 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
                   ))}
                 </div>
               )}
+            </section>
+
+            {/* Section 4: Opt-in Corrections Loop Setting */}
+            <section className="space-y-2.5 border-t border-[#E6DFD3] pt-4">
+              <div>
+                <h4 className="text-sm font-semibold text-[#1C1917]">
+                  Guide improvements
+                </h4>
+              </div>
+              <label className="flex items-start gap-3 p-3.5 bg-white border border-[#E6DFD3] rounded-xl text-xs cursor-pointer hover:border-[#D6CEBE] transition-colors">
+                <input
+                  type="checkbox"
+                  checked={Boolean(shareCorrectionsWithNic)}
+                  onChange={(e) => {
+                    if (onToggleShareCorrections) {
+                      onToggleShareCorrections(e.target.checked);
+                    }
+                  }}
+                  className="mt-0.5 h-4 w-4 rounded border-[#D6CEBE] text-[#9A3412] focus:ring-[#9A3412]"
+                />
+                <span className="text-[#292524] leading-relaxed">
+                  Help improve the guide: when my screen doesn&apos;t match the guide&apos;s notes, send a text-only note to Nic (no name, email, or images).
+                </span>
+              </label>
             </section>
           </div>
         )}

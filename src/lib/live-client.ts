@@ -20,6 +20,10 @@ import {
   TaskContractFields,
   UserProjectDoc,
   StoredContractCard,
+  AuditArea,
+  AuditRating,
+  AuditRunDoc,
+  StoredScorecardCard,
 } from './firebase.js';
 
 export interface RoutineState {
@@ -48,6 +52,7 @@ export interface ChatMessage {
     sentRefId?: string;
   };
   contractCard?: StoredContractCard;
+  scorecardCard?: StoredScorecardCard;
   toolNotice?: string;
   bookingUrl?: string;
   retryText?: string;
@@ -72,6 +77,7 @@ export interface LiveClientConfig {
   sessionNotes?: string[];
   toolsProfile?: ToolsProfileDoc | null;
   userProjects?: Record<string, UserProjectDoc>;
+  latestAudit?: AuditRunDoc | null;
   context?: any;
   onTranscriptUpdate: (messages: ChatMessage[]) => void;
   onLiveStateChange: (state: {
@@ -100,6 +106,19 @@ export interface LiveClientConfig {
     patch: ToolsProfilePatch
   ) => Promise<{ summaryLine: string; undoSnapshot: ToolsProfileDoc } | null>;
   onContractSaved?: (card: StoredContractCard) => Promise<UserProjectDoc | null>;
+  onAuditResultRecorded?: (payload: {
+    appId: string;
+    area: AuditArea;
+    rating: AuditRating;
+    reason: string;
+  }) => Promise<void> | void;
+  onKnowledgeMismatchReported?: (payload: {
+    topic: string;
+    notesSay: string;
+    screenShows: string;
+    device: string;
+    alsoSavedSessionNote: boolean;
+  }) => Promise<void> | void;
 }
 
 const MIN_FRAME_INTERVAL_MS = 3000; // At most 1 frame every 3 seconds in voice mode
@@ -241,13 +260,15 @@ export class CalmGuideLiveClient {
   }
 
   private buildContextPayload() {
+    const projectsArray = Object.values(this.config.userProjects || {});
     return {
       timezone: this.config.userTimezone,
       routineState: this.getRoutineState(),
       progressSummary: this.config.progressSummary || null,
       sessionNotes: this.config.sessionNotes || [],
       toolsProfile: this.config.toolsProfile || null,
-      userProjects: this.config.userProjects || {},
+      userProjects: projectsArray,
+      latestAudit: this.config.latestAudit || null,
       recentTranscript: this.messages
         .filter(m => m.role === 'user' || m.role === 'guide')
         .slice(-20)
@@ -259,7 +280,8 @@ export class CalmGuideLiveClient {
   public pushLiveContextRefresh(
     includeRoutineTurnUpdate: boolean = false,
     toolsProfileUpdated: boolean = false,
-    userProjectsUpdated: boolean = false
+    userProjectsUpdated: boolean = false,
+    latestAuditUpdated: boolean = false
   ) {
     if (this.isLiveActive && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
@@ -271,6 +293,7 @@ export class CalmGuideLiveClient {
             routineState: includeRoutineTurnUpdate ? ctx.routineState : undefined,
             toolsProfileUpdated: toolsProfileUpdated || undefined,
             userProjectsUpdated: userProjectsUpdated || undefined,
+            latestAuditUpdated: latestAuditUpdated || undefined,
           })
         );
       } catch (_) {}
@@ -1110,7 +1133,8 @@ export class CalmGuideLiveClient {
           progressSummary: this.config.progressSummary || null,
           sessionNotes: this.config.sessionNotes || [],
           toolsProfile: this.config.toolsProfile || null,
-          userProjects: this.config.userProjects || {},
+          userProjects: Object.values(this.config.userProjects || {}),
+          latestAudit: this.config.latestAudit || null,
         }),
       });
 
@@ -1173,9 +1197,62 @@ export class CalmGuideLiveClient {
         const hasExplicitToolsUpdate = data.toolInvocations.some(
           (ti: any) => ti.name === 'update_tools_profile'
         );
+        const hasExplicitSessionNote = data.toolInvocations.some(
+          (ti: any) => ti.name === 'save_session_note'
+        );
 
-        for (const ti of data.toolInvocations) {
-          if (ti.name === 'launch_app') {
+        // Sort so record_audit_result runs before confirm_step
+        const sortedInvocations = [...data.toolInvocations].sort((a: any, b: any) => {
+          if (a?.name === 'record_audit_result' && b?.name !== 'record_audit_result') return -1;
+          if (a?.name !== 'record_audit_result' && b?.name === 'record_audit_result') return 1;
+          return 0;
+        });
+
+        for (const ti of sortedInvocations) {
+          if (ti.name === 'record_audit_result') {
+            const resObj = ti.result || {};
+            const appId = String(
+              resObj.app_id || ti.args?.app_id || this.getRoutineState().activeRoutineId || 'safety-audit'
+            ).trim();
+            const area = String(resObj.area || ti.args?.area || 'connections').trim() as AuditArea;
+            const rawRating = String(resObj.rating || ti.args?.rating || 'amber').trim().toLowerCase();
+            const rating: AuditRating =
+              rawRating === 'green' || rawRating === 'amber' || rawRating === 'red'
+                ? rawRating
+                : 'amber';
+            const reason = String(resObj.reason || ti.args?.reason || '').trim();
+            if (this.config.onAuditResultRecorded) {
+              try {
+                await this.config.onAuditResultRecorded({ appId, area, rating, reason });
+              } catch (err) {
+                console.warn('Failed to record audit result:', err);
+              }
+            }
+          } else if (ti.name === 'report_knowledge_mismatch') {
+            const resObj = ti.result || {};
+            const topic = String(resObj.topic || ti.args?.topic || 'menu or setting').trim();
+            const notesSay = String(resObj.notes_say || ti.args?.notes_say || '').trim();
+            const screenShows = String(resObj.screen_shows || ti.args?.screen_shows || '').trim();
+            const device = String(
+              resObj.device ||
+                ti.args?.device ||
+                this.config.toolsProfile?.devices?.[0] ||
+                'Website'
+            ).trim();
+            if (this.config.onKnowledgeMismatchReported) {
+              try {
+                await this.config.onKnowledgeMismatchReported({
+                  topic,
+                  notesSay,
+                  screenShows,
+                  device,
+                  alsoSavedSessionNote: hasExplicitSessionNote,
+                });
+              } catch (err) {
+                console.warn('Failed to handle knowledge mismatch:', err);
+              }
+            }
+          } else if (ti.name === 'launch_app') {
             this.config.onAppLaunched(ti.args?.app_id);
           } else if (ti.name === 'confirm_step' || ti.name === 'update_routine_progress') {
             const appId = ti.args?.app_id || ti.result?.app_id;
@@ -1209,20 +1286,20 @@ export class CalmGuideLiveClient {
               }
             }
           } else if (ti.name === 'update_tools_profile') {
-            const res = ti.result || {};
+            const resObj = ti.result || {};
             const patch: ToolsProfilePatch = {
-              add: Array.isArray(res.add) ? res.add : Array.isArray(ti.args?.add) ? ti.args.add : [],
-              remove: Array.isArray(res.remove)
-                ? res.remove
+              add: Array.isArray(resObj.add) ? resObj.add : Array.isArray(ti.args?.add) ? ti.args.add : [],
+              remove: Array.isArray(resObj.remove)
+                ? resObj.remove
                 : Array.isArray(ti.args?.remove)
                 ? ti.args.remove
                 : [],
-              devices: Array.isArray(res.devices)
-                ? res.devices
+              devices: Array.isArray(resObj.devices)
+                ? resObj.devices
                 : Array.isArray(ti.args?.devices)
                 ? ti.args.devices
                 : [],
-              otherAdded: Array.isArray(res.otherAdded) ? res.otherAdded : [],
+              otherAdded: Array.isArray(resObj.otherAdded) ? resObj.otherAdded : [],
             };
             await this.applyToolsProfilePatch(patch);
           } else if (ti.name === 'save_task_contract') {

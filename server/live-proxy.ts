@@ -7,6 +7,7 @@ import {
   formatRoutineStateSection,
   formatToolsProfileSection,
   formatUserProjectsSection,
+  formatLatestAuditSection,
   SystemInstructionContext,
 } from './knowledge.js';
 import { toolDeclarations, executeServerTool } from './tools.js';
@@ -105,6 +106,41 @@ function mergeContextObject(
         }));
     }
 
+    if (contextObj.latestAudit !== undefined) {
+      if (contextObj.latestAudit && typeof contextObj.latestAudit === 'object') {
+        const rawResults =
+          contextObj.latestAudit.results && typeof contextObj.latestAudit.results === 'object'
+            ? contextObj.latestAudit.results
+            : {};
+        const cleanResults: Record<string, { rating: string; reason: string }> = {};
+        for (const [area, val] of Object.entries(rawResults)) {
+          if (val && typeof val === 'object') {
+            cleanResults[area] = {
+              rating: String((val as any).rating || 'amber').slice(0, 20),
+              reason: String((val as any).reason || '').slice(0, 500),
+            };
+          }
+        }
+        target.latestAudit = {
+          appId:
+            typeof contextObj.latestAudit.appId === 'string'
+              ? contextObj.latestAudit.appId.slice(0, 80)
+              : 'safety-audit',
+          startedAt:
+            typeof contextObj.latestAudit.startedAt === 'string'
+              ? contextObj.latestAudit.startedAt.slice(0, 60)
+              : undefined,
+          completedAt:
+            typeof contextObj.latestAudit.completedAt === 'string'
+              ? contextObj.latestAudit.completedAt.slice(0, 60)
+              : null,
+          results: cleanResults,
+        };
+      } else {
+        target.latestAudit = null;
+      }
+    }
+
     if (Array.isArray(contextObj.recentTranscript)) {
       target.recentTranscript = contextObj.recentTranscript
         .slice(-20)
@@ -193,6 +229,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         routineState: latestContext.routineState,
         toolsProfile: latestContext.toolsProfile,
         userProjects: latestContext.userProjects,
+        latestAudit: latestContext.latestAudit,
         extraContext: latestContext.extraContext,
         recentTranscript: includeTranscriptInSystemPrompt ? latestContext.recentTranscript : undefined,
       };
@@ -538,7 +575,10 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
       if (parsed.type === 'context' || parsed.type === 'context_update') {
         mergeContextObject(latestContext, parsed.context || parsed);
         if (
-          (parsed.routineState || parsed.toolsProfileUpdated || parsed.userProjectsUpdated) &&
+          (parsed.routineState ||
+            parsed.toolsProfileUpdated ||
+            parsed.userProjectsUpdated ||
+            parsed.latestAuditUpdated) &&
           session &&
           !isReconnecting
         ) {
@@ -546,13 +586,14 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
             const routineBlock = formatRoutineStateSection(product, latestContext.routineState);
             const toolsBlock = formatToolsProfileSection(latestContext.toolsProfile);
             const projectsBlock = formatUserProjectsSection(product, latestContext.userProjects);
+            const auditBlock = formatLatestAuditSection(latestContext.latestAudit);
             session.sendClientContent({
               turns: [
                 {
                   role: 'user',
                   parts: [
                     {
-                      text: `[System Context Update]\n${routineBlock}\n\n${toolsBlock}\n\n${projectsBlock}`,
+                      text: `[System Context Update]\n${routineBlock}\n\n${toolsBlock}\n\n${projectsBlock}\n\n${auditBlock}`,
                     },
                   ],
                 },

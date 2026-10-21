@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, Circle, HelpCircle, MapPin } from 'lucide-react';
+import { CheckCircle2, Circle, HelpCircle, MapPin, Calendar } from 'lucide-react';
 import { StepEvidence } from '../lib/firebase.js';
 
 export interface GuidedAppStepItem {
@@ -32,6 +32,7 @@ export interface GuidedAppCardProps {
   onSelectStep?: (stepNumber: number) => void;
   onAskAboutStep?: (stepNumber: number, stepTitle: string) => void;
   onComplete?: () => void;
+  onOpenCalendarReminder?: () => void;
 }
 
 function getEvidenceBadgeLabel(evidence?: StepEvidence): string {
@@ -41,6 +42,7 @@ function getEvidenceBadgeLabel(evidence?: StepEvidence): string {
 }
 
 export const GuidedAppCard: React.FC<GuidedAppCardProps> = ({
+  appId,
   title,
   goal,
   activeStep: propActiveStep = 1,
@@ -49,6 +51,7 @@ export const GuidedAppCard: React.FC<GuidedAppCardProps> = ({
   onSelectStep,
   onAskAboutStep,
   onComplete,
+  onOpenCalendarReminder,
 }) => {
   const [activeStep, setActiveStep] = useState<number>(propActiveStep);
 
@@ -244,6 +247,23 @@ export const GuidedAppCard: React.FC<GuidedAppCardProps> = ({
                     <p className="text-[#14532D] text-[11px] font-mono bg-[#14532D]/5 border border-[#14532D]/15 rounded px-2 py-1">
                       Note: {step.note}
                     </p>
+                  )}
+
+                  {/* Offer calendar reminder on Getting Started step 11 */}
+                  {appId === 'getting-started' && step.number === 11 && onOpenCalendarReminder && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenCalendarReminder();
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E6DFD3] bg-[#FBF9F5] hover:bg-[#F4F0E8] text-[#1C1917] text-xs font-medium transition-colors"
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-[#9A3412]" />
+                        <span>Add weekly check to my calendar</span>
+                      </button>
+                    </div>
                   )}
 
                   {/* Ask about this step button */}

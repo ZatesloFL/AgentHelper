@@ -31,6 +31,7 @@ interface AdminData {
   knowledgeFiles: Array<{
     product: string;
     title: string;
+    filePath?: string;
     lastChecked: string;
     daysOld: number;
     isStale: boolean;
@@ -43,6 +44,27 @@ interface AdminData {
       UNKNOWN: number;
       NIC: number;
     };
+    fileTagCounts?: {
+      SEEN: number;
+      DOC: number;
+      SAID: number;
+      WEB: number;
+      INFERRED: number;
+      UNKNOWN: number;
+      NIC: number;
+    };
+    playbookTagCounts?: {
+      SEEN: number;
+      DOC: number;
+      SAID: number;
+      WEB: number;
+      INFERRED: number;
+      UNKNOWN: number;
+      NIC: number;
+    };
+    playbookTitle?: string;
+    playbookFilePath?: string;
+    playbookLastChecked?: string;
   }>;
   config: {
     liveModel: string;
@@ -348,84 +370,158 @@ export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
           </div>
         )}
 
-        {/* Knowledge Base Freshness */}
-        <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs space-y-3">
-          <h2 className="text-base font-semibold text-[#1C1917]">
-            Knowledge Packs & Freshness Audits
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {adminData?.knowledgeFiles.map((kf) => (
-              <div
-                key={kf.product}
-                className={`p-3.5 rounded-lg border text-xs space-y-2 ${
-                  kf.isStale
-                    ? 'bg-amber-50/50 border-amber-200'
-                    : 'bg-[#FBF9F5] border-[#E6DFD3]'
-                }`}
-              >
+        {/* Knowledge Base Freshness & Per-File Tag Counts */}
+        <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-[#1C1917]">
+              Knowledge Packs & Evidence Tag Counts per File
+            </h2>
+            <span className="text-[11px] font-mono text-[#78716C]">
+              [SEEN] · [DOC] · [SAID] · [WEB] · [INFERRED] · [UNKNOWN] · [NIC]
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {adminData?.knowledgeFiles.map((kf) => {
+              const prodCounts = kf.fileTagCounts || kf.tagCounts;
+              return (
+                <div
+                  key={kf.product}
+                  className={`p-3.5 rounded-lg border text-xs space-y-2.5 ${
+                    kf.isStale
+                      ? 'bg-amber-50/50 border-amber-200'
+                      : 'bg-[#FBF9F5] border-[#E6DFD3]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-[#1C1917] capitalize">{kf.product}</span>
+                      <span className="text-[11px] font-mono text-[#78716C] ml-2">
+                        ({kf.filePath || `knowledge/${kf.product}.md`})
+                      </span>
+                    </div>
+                    {kf.isStale ? (
+                      <span className="text-[10px] text-[#9A3412] font-mono flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" />
+                        <span>{kf.daysOld}d old (Stale)</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-[#14532D] font-mono flex items-center gap-1">
+                        <CheckCircle className="w-3 h-3" />
+                        <span>{kf.daysOld}d old</span>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-[11px] text-[#78716C] font-mono">
+                    Checked: {kf.lastChecked}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#57534E] font-mono border-t border-[#E6DFD3] pt-2">
+                    <span>[SEEN]: {prodCounts?.SEEN ?? 0}</span>
+                    <span>·</span>
+                    <span>[DOC]: {prodCounts?.DOC ?? 0}</span>
+                    <span>·</span>
+                    <span>[SAID]: {prodCounts?.SAID ?? 0}</span>
+                    <span>·</span>
+                    <span>[WEB]: {prodCounts?.WEB ?? 0}</span>
+                    <span>·</span>
+                    <span>[INFERRED]: {prodCounts?.INFERRED ?? 0}</span>
+                    <span>·</span>
+                    <span>[UNKNOWN]: {prodCounts?.UNKNOWN ?? 0}</span>
+                    <span>·</span>
+                    <span>[NIC]: {prodCounts?.NIC ?? 0}</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Playbook Knowledge File Card */}
+            {adminData?.knowledgeFiles[0]?.playbookTagCounts && (
+              <div className="p-3.5 rounded-lg border bg-[#FBF9F5] border-[#E6DFD3] text-xs space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-[#1C1917] capitalize">{kf.product}</span>
-                  {kf.isStale ? (
-                    <span className="text-[10px] text-[#9A3412] font-mono flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" />
-                      <span>{kf.daysOld}d old (Stale)</span>
+                  <div>
+                    <span className="font-bold text-[#1C1917]">
+                      {adminData.knowledgeFiles[0].playbookTitle || "Nic's Playbook"}
                     </span>
-                  ) : (
-                    <span className="text-[10px] text-[#14532D] font-mono flex items-center gap-1">
-                      <CheckCircle className="w-3 h-3" />
-                      <span>{kf.daysOld}d old</span>
+                    <span className="text-[11px] font-mono text-[#78716C] ml-2">
+                      ({adminData.knowledgeFiles[0].playbookFilePath || 'knowledge/muse-playbook.md'})
                     </span>
-                  )}
+                  </div>
+                  <span className="text-[10px] text-[#14532D] font-mono flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" />
+                    <span>Playbook</span>
+                  </span>
                 </div>
 
                 <div className="text-[11px] text-[#78716C] font-mono">
-                  Checked: {kf.lastChecked}
+                  Checked: {adminData.knowledgeFiles[0].playbookLastChecked || adminData.knowledgeFiles[0].lastChecked}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#57534E] font-mono border-t border-[#E6DFD3] pt-2">
-                  <span>[SEEN]: {kf.tagCounts?.SEEN ?? 0}</span>
+                  <span>[SEEN]: {adminData.knowledgeFiles[0].playbookTagCounts.SEEN ?? 0}</span>
                   <span>·</span>
-                  <span>[DOC]: {kf.tagCounts?.DOC ?? 0}</span>
+                  <span>[DOC]: {adminData.knowledgeFiles[0].playbookTagCounts.DOC ?? 0}</span>
                   <span>·</span>
-                  <span>[SAID]: {kf.tagCounts?.SAID ?? 0}</span>
+                  <span>[SAID]: {adminData.knowledgeFiles[0].playbookTagCounts.SAID ?? 0}</span>
                   <span>·</span>
-                  <span>[WEB]: {kf.tagCounts?.WEB ?? 0}</span>
+                  <span>[WEB]: {adminData.knowledgeFiles[0].playbookTagCounts.WEB ?? 0}</span>
                   <span>·</span>
-                  <span>[INFERRED]: {kf.tagCounts?.INFERRED ?? 0}</span>
+                  <span>[INFERRED]: {adminData.knowledgeFiles[0].playbookTagCounts.INFERRED ?? 0}</span>
                   <span>·</span>
-                  <span>[UNKNOWN]: {kf.tagCounts?.UNKNOWN ?? 0}</span>
+                  <span>[UNKNOWN]: {adminData.knowledgeFiles[0].playbookTagCounts.UNKNOWN ?? 0}</span>
                   <span>·</span>
-                  <span>[NIC]: {kf.tagCounts?.NIC ?? 0}</span>
+                  <span>[NIC]: {adminData.knowledgeFiles[0].playbookTagCounts.NIC ?? 0}</span>
                 </div>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
-        {/* Handoff Reports (Google Sheet) */}
+        {/* Google Sheet Tabs: Handoffs, Corrections, Tools */}
         <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="space-y-1">
             <h2 className="text-base font-semibold text-[#1C1917]">
-              Handoff Reports
+              Google Sheet Tabs (Handoffs, Corrections & Tools)
             </h2>
             <p className="text-xs text-[#78716C]">
-              User-approved handoff reports are sent directly to your configured Google Sheet.
+              Direct links to your Google Sheet tabs for Handoffs, screen/note Corrections, and anonymous Tools profiles.
             </p>
           </div>
 
           {adminData?.config.sheetUrl ? (
-            <a
-              href={adminData.config.sheetUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium rounded-lg inline-flex items-center gap-2 transition-colors shrink-0"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>Open handoff reports (Google Sheet)</span>
-            </a>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <a
+                href={adminData.config.sheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium rounded-lg inline-flex items-center gap-1.5 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Handoffs</span>
+              </a>
+              <a
+                href={`${adminData.config.sheetUrl}${adminData.config.sheetUrl.includes('#') ? '' : '#tab=Corrections'}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-[#F4F0E8] hover:bg-[#EAE4D7] border border-[#E6DFD3] text-[#1C1917] text-xs font-medium rounded-lg inline-flex items-center gap-1.5 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-[#9A3412]" />
+                <span>Corrections</span>
+              </a>
+              <a
+                href={`${adminData.config.sheetUrl}${adminData.config.sheetUrl.includes('#') ? '' : '#tab=Tools'}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-[#F4F0E8] hover:bg-[#EAE4D7] border border-[#E6DFD3] text-[#1C1917] text-xs font-medium rounded-lg inline-flex items-center gap-1.5 transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-[#14532D]" />
+                <span>Tools</span>
+              </a>
+            </div>
           ) : (
             <span className="text-xs text-[#78716C] font-mono bg-[#FBF9F5] border border-[#E6DFD3] px-3 py-2 rounded-lg">
-              Set SHEET_URL in environment to enable direct link
+              Set SHEET_URL in environment to enable direct links (Handoffs, Corrections, Tools)
             </span>
           )}
         </div>

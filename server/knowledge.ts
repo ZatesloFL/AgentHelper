@@ -27,6 +27,8 @@ export interface KnowledgeInfo {
   daysOld: number;
   isStale: boolean; // > 14 days old
   tagCounts: KnowledgeTagCounts;
+  fileTagCounts: KnowledgeTagCounts;
+  playbookTagCounts: KnowledgeTagCounts;
   content: string;
   playbookTitle: string;
   playbookFilePath: string;
@@ -163,12 +165,20 @@ export interface UserProjectPayload {
   };
 }
 
+export interface LatestAuditPayload {
+  appId?: string;
+  startedAt?: string;
+  completedAt?: string | null;
+  results?: Record<string, { rating: 'green' | 'amber' | 'red' | string; reason: string }>;
+}
+
 export interface SystemInstructionContext {
   progressSummary?: ProgressSummaryPayload | string | null;
   sessionNotes?: string[];
   routineState?: RoutineStatePayload | null;
   toolsProfile?: ToolsProfilePayload | null;
   userProjects?: UserProjectPayload[] | null;
+  latestAudit?: LatestAuditPayload | null;
   recentTranscript?: Array<{ role: string; text: string }>;
   extraContext?: string;
 }
@@ -238,6 +248,18 @@ function countTagOccurrences(text: string, tag: string): number {
   return (text.match(regex) || []).length;
 }
 
+function buildTagCountsForText(text: string): KnowledgeTagCounts {
+  return {
+    SEEN: countTagOccurrences(text, 'SEEN'),
+    DOC: countTagOccurrences(text, 'DOC'),
+    SAID: countTagOccurrences(text, 'SAID'),
+    WEB: countTagOccurrences(text, 'WEB'),
+    INFERRED: countTagOccurrences(text, 'INFERRED'),
+    UNKNOWN: countTagOccurrences(text, 'UNKNOWN'),
+    NIC: countTagOccurrences(text, 'NIC'),
+  };
+}
+
 export function getAvailableProducts(): string[] {
   return getEnabledProducts().map(p => p.id);
 }
@@ -282,15 +304,9 @@ export function getKnowledge(product: string = 'muse'): KnowledgeInfo {
   const isStale = daysOld > 14;
 
   const combinedText = `${content}\n${playbookContent}`;
-  const tagCounts: KnowledgeTagCounts = {
-    SEEN: countTagOccurrences(combinedText, 'SEEN'),
-    DOC: countTagOccurrences(combinedText, 'DOC'),
-    SAID: countTagOccurrences(combinedText, 'SAID'),
-    WEB: countTagOccurrences(combinedText, 'WEB'),
-    INFERRED: countTagOccurrences(combinedText, 'INFERRED'),
-    UNKNOWN: countTagOccurrences(combinedText, 'UNKNOWN'),
-    NIC: countTagOccurrences(combinedText, 'NIC'),
-  };
+  const tagCounts = buildTagCountsForText(combinedText);
+  const fileTagCounts = buildTagCountsForText(content);
+  const playbookTagCounts = buildTagCountsForText(playbookContent);
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
   const title = titleMatch ? titleMatch[1].trim() : registered?.name || `${safeId.toUpperCase()}`;
@@ -308,6 +324,8 @@ export function getKnowledge(product: string = 'muse'): KnowledgeInfo {
     daysOld,
     isStale,
     tagCounts,
+    fileTagCounts,
+    playbookTagCounts,
     content,
     playbookTitle,
     playbookFilePath: resolvedPlaybookRelPath,
@@ -755,6 +773,22 @@ export function formatUserProjectsSection(
   return lines.join('\n');
 }
 
+export function formatLatestAuditSection(latestAudit?: LatestAuditPayload | null): string {
+  if (!latestAudit || !latestAudit.results || Object.keys(latestAudit.results).length === 0) {
+    return `Previous Check-up Scorecard: No previous check-up recorded yet.`;
+  }
+
+  const completedDate = latestAudit.completedAt || latestAudit.startedAt || 'earlier';
+  const lines: string[] = [
+    `Previous Check-up Scorecard (from ${completedDate}, routine: "${latestAudit.appId || 'safety-audit'}"):`,
+  ];
+  for (const [area, entry] of Object.entries(latestAudit.results)) {
+    if (!entry) continue;
+    lines.push(`- ${area}: ${entry.rating} — ${entry.reason || 'no reason noted'}`);
+  }
+  return lines.join('\n');
+}
+
 export function formatRoutineStateSection(product: string, routineState?: RoutineStatePayload | null): string {
   if (!routineState || !routineState.activeRoutineId) {
     return 'Current Routine State: None active.';
@@ -788,12 +822,16 @@ export function formatRoutineStateSection(product: string, routineState?: Routin
           activeStepObj.why ? `\n  - why: ${activeStepObj.why}` : ''
         }${activeStepObj.if_stuck ? `\n  - if_stuck: ${activeStepObj.if_stuck}` : ''}${
           activeStepObj.safety ? `\n  - safety: ${activeStepObj.safety}` : ''
+        }${activeStepObj.area ? `\n  - area: ${activeStepObj.area}` : ''}${
+          activeStepObj.rating ? `\n  - rating: ${activeStepObj.rating}` : ''
         }`
       : activeStepNum ?? 'All steps completed'
   }
 - Coaching Reminder: Only call confirm_step (with app_id="${matchedApp.id}", step=${activeStepNum ?? 1}, evidence="screen"|"user", note="...") when Step ${activeStepNum ?? 1}'s done_when is met.${
-    hasNextStep ? ` After confirming, ask Step ${nextStepNum}'s coach question.` : ''
-  }`;
+    activeStepObj?.area
+      ? ` Because this check-up step covers area "${activeStepObj.area}", also call record_audit_result({ app_id: "${matchedApp.id}", area: "${activeStepObj.area}", rating: "green"|"amber"|"red", reason: "..." }) using the step's rating guide.`
+      : ''
+  }${hasNextStep ? ` After confirming, ask Step ${nextStepNum}'s coach question.` : ''}`;
 }
 
 function formatEarlierSessionMemorySection(
@@ -811,7 +849,10 @@ function formatEarlierSessionMemorySection(
   // 2. User's Active Projects ("My projects")
   parts.push(formatUserProjectsSection(product, contextObj.userProjects));
 
-  // 3. Progress Summary
+  // 3. Previous Check-up Audit Results (so the guide can say what changed during check-ups and check for red areas)
+  parts.push(formatLatestAuditSection(contextObj.latestAudit));
+
+  // 4. Progress Summary
   const ps = contextObj.progressSummary;
   if (typeof ps === 'string' && ps.trim()) {
     parts.push(`Progress Summary:\n${ps.trim().slice(0, 1500)}`);
@@ -840,7 +881,7 @@ function formatEarlierSessionMemorySection(
     }
   }
 
-  // 4. Active Session Notes
+  // 5. Active Session Notes
   if (Array.isArray(contextObj.sessionNotes) && contextObj.sessionNotes.length > 0) {
     const formattedNotes = contextObj.sessionNotes
       .filter(n => typeof n === 'string' && n.trim())
@@ -852,15 +893,15 @@ function formatEarlierSessionMemorySection(
     }
   }
 
-  // 5. Extra context string if provided
+  // 6. Extra context string if provided
   if (contextObj.extraContext && contextObj.extraContext.trim()) {
     parts.push(contextObj.extraContext.trim().slice(0, 2000));
   }
 
-  // 6. Current Routine State
+  // 7. Current Routine State
   parts.push(formatRoutineStateSection(product, contextObj.routineState));
 
-  // 7. Recent Conversation Transcript Turns (up to last 20 turns, used for session continuity / fresh voice reconnect)
+  // 8. Recent Conversation Transcript Turns (up to last 20 turns, used for session continuity / fresh voice reconnect)
   if (Array.isArray(contextObj.recentTranscript) && contextObj.recentTranscript.length > 0) {
     const formattedTurns = contextObj.recentTranscript
       .slice(-20)
@@ -996,12 +1037,12 @@ Style: warm, plain, unhurried. Short sentences. One step at a time. Never more t
 
 How you work:
 1. Learn the goal first. Ask what they want the agent to do for them, and how nervous they are about it. Start small.
-2. When you can see their screen, say what you see before you tell them what to do ("I can see {{PRODUCT_NAME}}'s Settings page. Is that right?"). Trust what is on screen over your notes. If the screen disagrees with your notes, say so and follow the screen. Note the mismatch with save_session_note.
+2. When you can see their screen, say what you see before you tell them what to do ("I can see {{PRODUCT_NAME}}'s Settings page. Is that right?"). Trust what is on screen over your notes. If the screen disagrees with your notes, say so and follow the screen. Note the mismatch with save_session_note AND call report_knowledge_mismatch({ topic, notes_say, screen_shows, device }).
 3. Today is {{TODAY}}. Your product notes carry a last-checked date. When you give steps from notes, say "as of {date}" if that date is more than 14 days old, and suggest sharing their screen to confirm.
 4. Safety posture to teach and model: least access first. Read-only before send. No payment access at first. Use a separate, low-stakes account while learning. Review connected apps and standing permissions on a schedule. Keep a human approval step before anything that sends, buys, deletes, or shares. Explain the tradeoff, then let them choose.
 5. Never ask for, repeat, or read out passwords, API keys, card numbers, government IDs, or one-time codes. If one appears on their screen, tell them to hide or close it and do not mention its contents.
 6. You only guide. You never control their screen or accounts. You do not give legal, financial, or medical advice.
-7. Your notes tag each claim: [SEEN] seen on a real screen, [DOC] Muse's own documentation, [SAID] the Muse agent said it, [WEB] third-party reporting, [INFERRED] a guess, [UNKNOWN] not observed, [NIC] Nic's recommendation. Never present [SAID], [INFERRED], or [UNKNOWN] as fact. When you use a [NIC] item, say 'Nic recommends…'. When the user's screen disagrees with your notes, trust the screen, say so, and save a note.
+7. Your notes tag each claim: [SEEN] seen on a real screen, [DOC] Muse's own documentation, [SAID] the Muse agent said it, [WEB] third-party reporting, [INFERRED] a guess, [UNKNOWN] not observed, [NIC] Nic's recommendation. Never present [SAID], [INFERRED], or [UNKNOWN] as fact. When you use a [NIC] item, say 'Nic recommends…'. When the user's screen disagrees with your notes, trust the screen, say so, and call both save_session_note and report_knowledge_mismatch({ topic, notes_say, screen_shows, device }).
 8. If you don't know which device the user is on (web, iPhone, Android, Mac app, WhatsApp), ask before giving directions. Menus differ.
 9. Tools profile ("Your tools") rules:
    - Recommend projects that fit the user's tools.
@@ -1014,6 +1055,11 @@ How you work:
    - When a user asks to move a project up a rung, check that the current rung has been working smoothly for about a week and that their last check-up has no red areas. Recommend, but let them decide.
    - When a user asks to move a project up or down a rung, walk through what the new rung means using the routine's Ladder text and the playbook's ladder rules. Update the rung with save_task_contract only after the user confirms they've changed the matching settings in Muse.
    - Never let a project with "purchases", "public posts", or "send to others" in its Do list go past rung 2. Explain why.
+11. Check-ups and scorecards:
+   - Check-up routine steps (safety-audit, weekly-review) have area and rating guides. After each such step, call record_audit_result({ app_id, area, rating: "green" | "amber" | "red", reason }) using the step's rating text to choose, in addition to confirm_step.
+   - Use the previous check-up scorecard results in your context to tell the user what changed since their last check-up (better, same, or worse).
+12. Incident help:
+   - If the user says Muse did something they didn't expect (sent, bought, posted, deleted, or changed something), stay calm, offer the 'Something Unexpected Happened' routine right away (launch_app with app_id="something-went-wrong"), and lead with stopping it first.
 
 Escalate to {{OWNER_NAME}} (call escalate_to_owner) when: you have failed to solve the same problem twice; the issue involves billing, account lockout, or a security incident; the person asks for a human; their situation needs judgment beyond setup (business or organization policy, sensitive data, regulated work); or you cannot verify something that matters. When you call escalate_to_owner, tell the user plainly: "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly."
 
@@ -1029,7 +1075,9 @@ CRITICAL RULES FOR GUIDED ROUTINES:
    - DO NOT dump a numbered list or bulleted checklist of all the steps into your response. Giving the user a bunch of steps overwhelms them and defeats the purpose of guided coaching.
    - Facilitate the routine interactively, ONE STEP AT A TIME.
 2. Step Confirmation Rules:
-   - Only call confirm_step when the step's done_when is met. If the step says verify: screen, ask to see the screen (request_screenshare) and confirm what you see. If the user declines screen sharing, you may accept their description and use evidence 'user'. Never confirm a step the user hasn't actually done. After confirming, ask the next step's coach question.
+   - Only call confirm_step when the step's done_when is met. If the step says verify: screen, ask to see the screen (request_screenshare) and confirm what you see. If the user declines screen sharing, you may accept their description and use evidence 'user'. Never confirm a step the user hasn't actually done.
+   - For check-up steps that include an area and rating guide, also call record_audit_result({ app_id, area, rating, reason }) when the step is completed.
+   - After confirming, ask the next step's coach question.
 3. When all steps in the routine are finished:
    - Follow the routine's Finish instructions: provide a calm one-paragraph summary, call save_session_note with the key details, if Finish includes save_contract call save_task_contract with the final contract and current rung, and suggest the recommended next routine.
 

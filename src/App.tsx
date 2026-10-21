@@ -5,6 +5,8 @@ import {
   AuthUser,
   getUserConsent,
   saveUserConsent,
+  getUserCorrectionsOptIn,
+  saveUserCorrectionsOptIn,
   getUserSessionNotes,
   saveUserSessionNote,
   deleteUserSessionNote,
@@ -31,6 +33,14 @@ import {
   UserProjectDoc,
   TaskContractFields,
   StoredContractCard,
+  AUDIT_AREAS,
+  AuditArea,
+  AuditRating,
+  AuditAreaResult,
+  AuditRunDoc,
+  StoredScorecardCard,
+  getUserAudits,
+  saveUserAuditDoc,
   deleteAllUserHistory,
   clearUserLocalStorage,
   ProgressSummaryDoc,
@@ -48,6 +58,8 @@ import { ScreenShareConsentModal } from './components/ScreenShareConsentModal.js
 import { GuidedAppCard } from './components/GuidedAppCard.js';
 import { ReportForNicCard } from './components/ReportForNicCard.js';
 import { TaskContractCard } from './components/TaskContractCard.js';
+import { ScorecardCard } from './components/ScorecardCard.js';
+import { CalendarReminderModal } from './components/CalendarReminderModal.js';
 import { CalendarEscalationModal } from './components/CalendarEscalationModal.js';
 import { NotesDrawer } from './components/NotesDrawer.js';
 import { KnowledgeModal } from './components/KnowledgeModal.js';
@@ -72,10 +84,18 @@ import {
   Pause,
   Play,
   Trash2,
+  ShieldCheck,
+  Calendar,
 } from 'lucide-react';
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+
+function isCheckupAppId(appId?: string | null): boolean {
+  return appId === 'safety-audit' || appId === 'weekly-review';
+}
 
 function createConversationId(): string {
   return `conv-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -156,11 +176,14 @@ export default function App() {
     onDeny: () => {},
   });
 
-  // Session Notes, Progress Summary, Routine Progress, User Projects, Past Conversations & Escalation
+  // Session Notes, Progress Summary, Routine Progress, User Projects, Audits, Corrections Opt-In & Escalation
   const [sessionNotes, setSessionNotes] = useState<SessionNote[]>([]);
   const [progressSummary, setProgressSummary] = useState<ProgressSummaryDoc | null>(null);
   const [routineProgressMap, setRoutineProgressMap] = useState<Record<string, RoutineProgressDoc>>({});
   const [userProjectsMap, setUserProjectsMap] = useState<Record<string, UserProjectDoc>>({});
+  const [userAudits, setUserAudits] = useState<AuditRunDoc[]>([]);
+  const [shareCorrectionsWithNic, setShareCorrectionsWithNic] = useState<boolean>(false);
+  const [showCalendarReminderModal, setShowCalendarReminderModal] = useState<boolean>(false);
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [pastConversations, setPastConversations] = useState<StoredConversation[]>([]);
   const [showNotesDrawer, setShowNotesDrawer] = useState<boolean>(false);
@@ -182,6 +205,18 @@ export default function App() {
   const progressSummaryRef = useRef<ProgressSummaryDoc | null>(null);
   const routineProgressMapRef = useRef<Record<string, RoutineProgressDoc>>({});
   const userProjectsMapRef = useRef<Record<string, UserProjectDoc>>({});
+  const userAuditsRef = useRef<AuditRunDoc[]>([]);
+  const activeAuditRunRef = useRef<{
+    id: string;
+    appId: string;
+    startedAt: string;
+    completedAt: string | null;
+    results: Partial<Record<AuditArea, AuditAreaResult>>;
+    previousAudit: AuditRunDoc | null;
+    scorecardEmitted?: boolean;
+  } | null>(null);
+  const shareCorrectionsWithNicRef = useRef<boolean>(false);
+  const guidedAppsRef = useRef<any[]>([]);
   const toolsProfileRef = useRef<ToolsProfileDoc | null>(null);
   const sessionNotesRef = useRef<SessionNote[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -203,6 +238,9 @@ export default function App() {
   progressSummaryRef.current = progressSummary;
   routineProgressMapRef.current = routineProgressMap;
   userProjectsMapRef.current = userProjectsMap;
+  userAuditsRef.current = userAudits;
+  shareCorrectionsWithNicRef.current = shareCorrectionsWithNic;
+  guidedAppsRef.current = guidedApps;
   toolsProfileRef.current = toolsProfile;
   sessionNotesRef.current = sessionNotes;
   messagesRef.current = messages;
@@ -333,6 +371,157 @@ export default function App() {
     []
   );
 
+  // Initialize a fresh audit run when a check-up routine (safety-audit or weekly-review) starts
+  const beginCheckupAuditRun = useCallback((appId: string) => {
+    const u = userRef.current;
+    const previousCompleted =
+      userAuditsRef.current.find(
+        a => a.results && Object.keys(a.results).length > 0
+      ) || null;
+
+    const runId = `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const startedAt = new Date().toISOString();
+    activeAuditRunRef.current = {
+      id: runId,
+      appId,
+      startedAt,
+      completedAt: null,
+      results: {},
+      previousAudit: previousCompleted,
+      scorecardEmitted: false,
+    };
+
+    // Inject the previous audit's results into the system prompt so the guide can say what changed
+    clientRef.current?.updateConfig({ latestAudit: previousCompleted });
+    clientRef.current?.pushLiveContextRefresh(false, false, false, true);
+
+    if (u) {
+      saveUserAuditDoc(u.uid, runId, {
+        appId,
+        startedAt,
+        completedAt: null,
+        results: {},
+      }).catch(err => console.warn('Failed to initialize audit doc:', err));
+    }
+  }, []);
+
+  // Finalize a check-up routine run and emit the ScorecardCard
+  const finalizeCheckupAndShowScorecard = useCallback(async (appId: string) => {
+    if (!isCheckupAppId(appId)) return;
+    const u = userRef.current;
+
+    let run = activeAuditRunRef.current;
+    if (!run || run.appId !== appId || run.scorecardEmitted) {
+      if (run?.scorecardEmitted) return;
+      const previousCompleted =
+        userAuditsRef.current.find(
+          a => a.results && Object.keys(a.results).length > 0
+        ) || null;
+      run = {
+        id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        appId,
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+        results: {},
+        previousAudit: previousCompleted,
+        scorecardEmitted: false,
+      };
+      activeAuditRunRef.current = run;
+    }
+
+    run.scorecardEmitted = true;
+    const completedAt = new Date().toISOString();
+    run.completedAt = completedAt;
+
+    // Ensure any completed check-up steps with an area have an entry in results even if the user checked steps manually
+    const latestCardMsg = [...messagesRef.current]
+      .reverse()
+      .find(m => m.appCard && m.appCard.appId === appId);
+    const routineSteps = latestCardMsg?.appCard?.steps || [];
+    const results: Partial<Record<AuditArea, AuditAreaResult>> = { ...run.results };
+
+    for (const step of routineSteps) {
+      const areaKey = (step.area || '').trim().toLowerCase() as AuditArea;
+      if (
+        step.completed &&
+        areaKey &&
+        AUDIT_AREAS.includes(areaKey) &&
+        !results[areaKey]
+      ) {
+        results[areaKey] = {
+          rating: 'green',
+          reason: step.note?.trim() || `${step.title} reviewed and confirmed.`,
+        };
+      }
+    }
+
+    run.results = results;
+
+    // Build Fix list (at most 3 items) from red/amber areas and guide summary
+    const fixList: string[] = [];
+    for (const area of AUDIT_AREAS) {
+      const entry = results[area];
+      if (entry && (entry.rating === 'red' || entry.rating === 'amber')) {
+        fixList.push(`${area.charAt(0).toUpperCase() + area.slice(1)}: ${entry.reason}`);
+        if (fixList.length >= 3) break;
+      }
+    }
+    if (fixList.length < 3 && progressSummaryRef.current?.suggestedNextStep) {
+      const nextStep = progressSummaryRef.current.suggestedNextStep.trim();
+      if (nextStep && !fixList.includes(nextStep)) {
+        fixList.push(nextStep);
+      }
+    }
+
+    const matchedApp = guidedAppsRef.current.find(a => a.id === appId);
+    const title = matchedApp?.title
+      ? `${matchedApp.title} Scorecard`
+      : appId === 'weekly-review'
+      ? '10-Minute Weekly Review Scorecard'
+      : 'Safety & Privacy Check-up Scorecard';
+
+    const scorecardCard: StoredScorecardCard = {
+      auditId: run.id,
+      appId,
+      title,
+      startedAt: run.startedAt,
+      completedAt,
+      results,
+      previousResults: run.previousAudit?.results || null,
+      fixList: fixList.slice(0, 3),
+    };
+
+    if (u) {
+      try {
+        const savedAudit = await saveUserAuditDoc(u.uid, run.id, {
+          appId,
+          startedAt: run.startedAt,
+          completedAt,
+          results,
+        });
+        const nextAudits = [
+          savedAudit,
+          ...userAuditsRef.current.filter(a => a.id !== savedAudit.id),
+        ];
+        setUserAudits(nextAudits);
+        userAuditsRef.current = nextAudits;
+        clientRef.current?.updateConfig({ latestAudit: savedAudit });
+        clientRef.current?.pushLiveContextRefresh(false, false, false, true);
+      } catch (err) {
+        console.warn('Failed to save completed audit doc:', err);
+      }
+    }
+
+    clientRef.current?.addMessage(
+      'guide',
+      `Here is your check-up scorecard for ${matchedApp?.title || 'this check-up'}.`,
+      {
+        source: 'typed',
+        scorecardCard,
+      }
+    );
+  }, []);
+
   // Create CalmGuideLiveClient ONCE on mount
   useEffect(() => {
     const client = new CalmGuideLiveClient({
@@ -376,6 +565,9 @@ export default function App() {
         setCurrentScreenFrame(frame);
       },
       onAppLaunched: (appId) => {
+        if (isCheckupAppId(appId)) {
+          beginCheckupAuditRun(appId);
+        }
         const prod = currentProductRef.current;
         authFetch(`/api/apps/${prod}`)
           .then(res => (res.ok ? res.json() : []))
@@ -449,6 +641,9 @@ export default function App() {
       },
       onRoutineCompleted: (appId) => {
         runProgressSummarize({ force: true });
+        if (isCheckupAppId(appId)) {
+          finalizeCheckupAndShowScorecard(appId);
+        }
         if (appId === 'getting-started') {
           setTimeout(() => {
             clientRef.current?.addMessage(
@@ -607,6 +802,91 @@ export default function App() {
           return null;
         }
       },
+      onAuditResultRecorded: async ({ appId, area, rating, reason }) => {
+        const u = userRef.current;
+        const targetAppId = isCheckupAppId(appId) ? appId : 'safety-audit';
+        if (!activeAuditRunRef.current || activeAuditRunRef.current.appId !== targetAppId) {
+          beginCheckupAuditRun(targetAppId);
+        }
+        const run = activeAuditRunRef.current!;
+        run.results = {
+          ...run.results,
+          [area]: { rating, reason },
+        };
+
+        if (u) {
+          try {
+            const savedAudit = await saveUserAuditDoc(u.uid, run.id, {
+              appId: run.appId,
+              startedAt: run.startedAt,
+              completedAt: run.completedAt,
+              results: run.results,
+            });
+            const nextAudits = [
+              savedAudit,
+              ...userAuditsRef.current.filter(a => a.id !== savedAudit.id),
+            ];
+            setUserAudits(nextAudits);
+            userAuditsRef.current = nextAudits;
+          } catch (err) {
+            console.warn('Failed to persist audit step result:', err);
+          }
+        }
+      },
+      onKnowledgeMismatchReported: async ({
+        topic,
+        notesSay,
+        screenShows,
+        device,
+        alsoSavedSessionNote,
+      }) => {
+        const u = userRef.current;
+        const prod = currentProductRef.current;
+
+        // Always ensure a session note is saved if the model didn't already call save_session_note in the same turn
+        if (u && !alsoSavedSessionNote) {
+          const noteText = `Screen mismatch (${topic} on ${device}): notes said "${notesSay}", screen showed "${screenShows}".`.slice(
+            0,
+            500
+          );
+          try {
+            await saveUserSessionNote(u.uid, prod, noteText);
+            const updatedNotes = await getUserSessionNotes(u.uid, prod);
+            setSessionNotes(updatedNotes);
+          } catch (err) {
+            console.warn('Failed to save mismatch session note:', err);
+          }
+        }
+
+        let sentToSheetOk = false;
+        if (shareCorrectionsWithNicRef.current) {
+          try {
+            const res = await authFetch('/api/corrections', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                product: prod,
+                device,
+                topic,
+                notesSay,
+                screenShows,
+              }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data?.ok === true) {
+              sentToSheetOk = true;
+            }
+          } catch (err) {
+            console.warn('Failed to send correction to Sheet:', err);
+          }
+        }
+
+        const systemLine = sentToSheetOk
+          ? `Noted: your screen differs from my notes about ${topic}. Sent to Nic so he can update the guide.`
+          : `Noted: your screen differs from my notes about ${topic}.`;
+
+        clientRef.current?.addMessage('system', systemLine);
+      },
     });
 
     clientRef.current = client;
@@ -614,10 +894,12 @@ export default function App() {
     return () => {
       client.stopLiveSession();
     };
-  }, [runProgressSummarize]);
+  }, [runProgressSummarize, beginCheckupAuditRun, finalizeCheckupAndShowScorecard]);
 
   // Keep client config updated via client.updateConfig(partial) without recreating the client
   useEffect(() => {
+    const latestCompletedAudit =
+      userAudits.find(a => a.results && Object.keys(a.results).length > 0) || null;
     clientRef.current?.updateConfig({
       user,
       product: currentProduct,
@@ -626,8 +908,20 @@ export default function App() {
       sessionNotes: sessionNotes.map(n => n.text),
       toolsProfile,
       userProjects: userProjectsMap,
+      latestAudit: activeAuditRunRef.current
+        ? activeAuditRunRef.current.previousAudit
+        : latestCompletedAudit,
     });
-  }, [user, currentProduct, currentProductName, progressSummary, sessionNotes, toolsProfile, userProjectsMap]);
+  }, [
+    user,
+    currentProduct,
+    currentProductName,
+    progressSummary,
+    sessionNotes,
+    toolsProfile,
+    userProjectsMap,
+    userAudits,
+  ]);
 
   // Check URL path on load (/admin) and fetch public /api/products & /api/health
   useEffect(() => {
@@ -665,20 +959,30 @@ export default function App() {
       .catch(console.error);
   }, []);
 
-  // Load or restore conversation, progress summary, routine progress, tools profile, projects, and notes for a given user & product
+  // Load or restore conversation, progress summary, routine progress, tools profile, projects, audits, and notes for a given user & product
   const loadProductSessionAndMemory = useCallback(
     async (uid: string, product: string, productName: string) => {
       conversationReadyRef.current = false;
       try {
-        const [notes, progressDoc, recentConv, routinesProg, loadedToolsProfile, loadedProjects] =
-          await Promise.all([
-            getUserSessionNotes(uid, product),
-            getUserProgressSummary(uid, product),
-            getRecentProductConversation(uid, product),
-            getUserRoutinesProgress(uid),
-            getUserToolsProfile(uid),
-            getUserProjects(uid),
-          ]);
+        const [
+          notes,
+          progressDoc,
+          recentConv,
+          routinesProg,
+          loadedToolsProfile,
+          loadedProjects,
+          loadedAudits,
+          correctionsOptIn,
+        ] = await Promise.all([
+          getUserSessionNotes(uid, product),
+          getUserProgressSummary(uid, product),
+          getRecentProductConversation(uid, product),
+          getUserRoutinesProgress(uid),
+          getUserToolsProfile(uid),
+          getUserProjects(uid),
+          getUserAudits(uid),
+          getUserCorrectionsOptIn(uid),
+        ]);
 
         setSessionNotes(notes);
         setProgressSummary(progressDoc);
@@ -687,6 +991,13 @@ export default function App() {
         toolsProfileRef.current = loadedToolsProfile;
         setUserProjectsMap(loadedProjects);
         userProjectsMapRef.current = loadedProjects;
+        setUserAudits(loadedAudits);
+        userAuditsRef.current = loadedAudits;
+        setShareCorrectionsWithNic(correctionsOptIn);
+        shareCorrectionsWithNicRef.current = correctionsOptIn;
+
+        const latestCompletedAudit =
+          loadedAudits.find(a => a.results && Object.keys(a.results).length > 0) || null;
 
         clientRef.current?.updateConfig({
           product,
@@ -695,6 +1006,7 @@ export default function App() {
           sessionNotes: notes.map(n => n.text),
           toolsProfile: loadedToolsProfile,
           userProjects: loadedProjects,
+          latestAudit: latestCompletedAudit,
         });
 
         const isRecent =
@@ -789,11 +1101,17 @@ export default function App() {
         conversationReadyRef.current = false;
         setShowConsentModal(false);
         setShowToolsModal(false);
+        setShowCalendarReminderModal(false);
         setSessionNotes([]);
         setProgressSummary(null);
         setRoutineProgressMap({});
         setUserProjectsMap({});
         userProjectsMapRef.current = {};
+        setUserAudits([]);
+        userAuditsRef.current = [];
+        activeAuditRunRef.current = null;
+        setShareCorrectionsWithNic(false);
+        shareCorrectionsWithNicRef.current = false;
         setToolsProfile(null);
         setPastConversations([]);
         setIsAdminUser(false);
@@ -1006,9 +1324,78 @@ export default function App() {
   };
 
   const handleLaunchApp = async (app: any) => {
-    if (!clientRef.current) return;
+    if (!clientRef.current || !app) return;
+    if (isCheckupAppId(app.id)) {
+      beginCheckupAuditRun(app.id);
+    }
     const existingProg = routineProgressMapRef.current[app.id] || null;
     await clientRef.current.startGuidedRoutine(app, existingProg);
+  };
+
+  const handleStartIncidentHelpNow = async () => {
+    if (!clientRef.current) return;
+    const found = guidedApps.find(a => a.id === 'something-went-wrong');
+    if (found) {
+      await handleLaunchApp(found);
+      return;
+    }
+    try {
+      const res = await authFetch(`/api/apps/${currentProduct}`);
+      if (res.ok) {
+        const apps = await res.json();
+        if (Array.isArray(apps)) {
+          setGuidedApps(apps);
+          const incidentApp = apps.find((a: any) => a.id === 'something-went-wrong');
+          if (incidentApp) {
+            await handleLaunchApp(incidentApp);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to start something-went-wrong routine:', err);
+    }
+  };
+
+  const handleSendScorecardReportToNic = (scorecard: StoredScorecardCard) => {
+    if (!clientRef.current) return;
+    const redLines: string[] = [];
+    const checkedLines: string[] = [];
+    for (const area of AUDIT_AREAS) {
+      const entry = scorecard.results?.[area];
+      if (!entry) continue;
+      checkedLines.push(`${area}: ${entry.rating} (${entry.reason})`);
+      if (entry.rating === 'red') {
+        redLines.push(`${area}: ${entry.reason}`);
+      }
+    }
+    const reportCard = {
+      goal: `Review my ${scorecard.title || 'Check-up Scorecard'} and help resolve red safety areas.`,
+      tried: checkedLines.join('; ').slice(0, 1000) || `Completed ${scorecard.title}.`,
+      blocker:
+        redLines.join('; ').slice(0, 1000) ||
+        'One or more check-up areas were rated red and need a human review.',
+    };
+    clientRef.current.addMessage(
+      'guide',
+      "I've drafted a short note for Nic below with the red items from your scorecard. Have a look, change anything you like, and press Send if it looks right.",
+      {
+        source: 'typed',
+        reportCard,
+      }
+    );
+  };
+
+  const handleToggleShareCorrections = async (enabled: boolean) => {
+    setShareCorrectionsWithNic(enabled);
+    shareCorrectionsWithNicRef.current = enabled;
+    if (!user) return;
+    try {
+      await saveUserCorrectionsOptIn(user.uid, enabled);
+    } catch (err: any) {
+      setLiveError(
+        err?.message || "I couldn't save that setting right now. Check your connection and try again."
+      );
+    }
   };
 
   const handleDeleteNote = async (noteId: string) => {
@@ -1063,6 +1450,9 @@ export default function App() {
     setRoutineProgressMap({});
     setUserProjectsMap({});
     userProjectsMapRef.current = {};
+    setUserAudits([]);
+    userAuditsRef.current = [];
+    activeAuditRunRef.current = null;
     setToolsProfile(null);
     toolsProfileRef.current = null;
     setPastConversations([]);
@@ -1345,8 +1735,8 @@ export default function App() {
         }}
       />
 
-      {/* Persistent Human Escalation Strip */}
-      <div className="bg-[#F4F0E8] border-b border-[#E6DFD3] px-6 py-2 text-xs flex items-center justify-between">
+      {/* Persistent Human Escalation & Incident Help Strip */}
+      <div className="bg-[#F4F0E8] border-b border-[#E6DFD3] px-6 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[#57534E]">
           <span className="font-semibold text-[#1C1917]">Least access first:</span>
           <span className="hidden sm:inline">
@@ -1359,13 +1749,24 @@ export default function App() {
           )}
         </div>
 
-        <button
-          onClick={() => setShowEscalationModal(true)}
-          className="text-[#1C1917] hover:text-[#9A3412] font-medium flex items-center gap-1 underline transition-colors"
-        >
-          <span>Need a human review? Talk to Nic</span>
-          <ArrowRight className="w-3 h-3" />
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={handleStartIncidentHelpNow}
+            className="text-[#57534E] hover:text-[#9A3412] font-medium underline transition-colors"
+          >
+            Something unexpected? Get help now
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowEscalationModal(true)}
+            className="text-[#1C1917] hover:text-[#9A3412] font-medium flex items-center gap-1 underline transition-colors"
+          >
+            <span>Need a human review? Talk to Nic</span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
       {/* Main Content Area */}
@@ -1492,8 +1893,10 @@ export default function App() {
                             `Can we focus on Step ${stepNumber}: "${stepTitle}"? What should I check or do here?`
                           );
                         }}
+                        onOpenCalendarReminder={() => setShowCalendarReminderModal(true)}
                         onComplete={() => {
-                          const isGettingStarted = m.appCard?.appId === 'getting-started';
+                          const appId = m.appCard?.appId || '';
+                          const isGettingStarted = appId === 'getting-started';
                           const savedNote = clientRef.current?.hasSavedNoteInRoutine();
                           const completionText = savedNote
                             ? `Great job completing the ${m.appCard?.title} routine! I have recorded your session notes.`
@@ -1504,8 +1907,20 @@ export default function App() {
                             source: 'typed',
                             openToolsAction: isGettingStarted,
                           });
+                          if (isCheckupAppId(appId)) {
+                            finalizeCheckupAndShowScorecard(appId);
+                          }
                           runProgressSummarize({ force: true });
                         }}
+                      />
+                    )}
+
+                    {/* Scorecard Card if shown when a check-up finishes */}
+                    {m.scorecardCard && (
+                      <ScorecardCard
+                        scorecard={m.scorecardCard}
+                        onOpenCalendarReminder={() => setShowCalendarReminderModal(true)}
+                        onSendReportToNic={handleSendScorecardReportToNic}
                       />
                     )}
 
@@ -1776,6 +2191,111 @@ export default function App() {
               </div>
               <ArrowRight className="w-3.5 h-3.5 text-[#78716C] shrink-0" />
             </button>
+
+            {/* Your safety at a glance in the sidebar */}
+            {(() => {
+              const latestAudit =
+                userAudits.find(a => a.results && Object.keys(a.results).length > 0) || null;
+              if (!latestAudit) {
+                return (
+                  <div className="p-3.5 bg-white border border-[#E6DFD3] rounded-xl text-xs space-y-2 shadow-2xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 font-semibold text-[#1C1917]">
+                        <ShieldCheck className="w-3.5 h-3.5 text-[#14532D]" />
+                        <span>Your safety at a glance</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCalendarReminderModal(true)}
+                        className="text-[11px] text-[#9A3412] hover:underline inline-flex items-center gap-1"
+                        title="Add weekly check to calendar"
+                      >
+                        <Calendar className="w-3 h-3" />
+                        <span>Reminder</span>
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-[#78716C] leading-relaxed">
+                      Run a Safety &amp; Privacy Check-up or 10-Minute Weekly Review to see your scorecard here.
+                    </p>
+                  </div>
+                );
+              }
+
+              const auditTime = new Date(
+                latestAudit.completedAt || latestAudit.startedAt
+              ).getTime();
+              const nowMs = Date.now();
+              const ageMs = Math.max(0, nowMs - auditTime);
+              const isOverdue = ageMs > TEN_DAYS_MS;
+              const nextDueDate = new Date(auditTime + SEVEN_DAYS_MS);
+              const coveredAreas = AUDIT_AREAS.filter(
+                area => Boolean(latestAudit.results?.[area])
+              );
+
+              return (
+                <div className="p-3.5 bg-white border border-[#E6DFD3] rounded-xl text-xs space-y-2.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-semibold text-[#1C1917]">
+                      <ShieldCheck className="w-3.5 h-3.5 text-[#14532D]" />
+                      <span>Your safety at a glance</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-[#78716C]">
+                      {new Date(auditTime).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  </div>
+
+                  {/* Row of colored dots */}
+                  <div className="flex items-center gap-2 py-0.5">
+                    {coveredAreas.map(area => {
+                      const entry = latestAudit.results[area]!;
+                      const dotClass =
+                        entry.rating === 'green'
+                          ? 'bg-[#14532D]'
+                          : entry.rating === 'red'
+                          ? 'bg-[#991B1B]'
+                          : 'bg-[#B45309]';
+                      return (
+                        <span
+                          key={area}
+                          title={`${area}: ${entry.rating} — ${entry.reason}`}
+                          className={`w-3 h-3 rounded-full ${dotClass}`}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#F4F0E8] text-[11px]">
+                    {isOverdue ? (
+                      <span className="font-medium text-[#B45309] bg-[#B45309]/10 border border-[#B45309]/25 px-2 py-0.5 rounded">
+                        Weekly check overdue
+                      </span>
+                    ) : (
+                      <span className="text-[#57534E]">
+                        Next check due:{' '}
+                        <strong className="font-medium text-[#1C1917]">
+                          {nextDueDate.toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </strong>
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => setShowCalendarReminderModal(true)}
+                      className="text-[#9A3412] hover:underline inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Calendar className="w-3 h-3" />
+                      <span>Calendar</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* My projects section at the top of the sidebar (only if the user has projects) */}
             {Object.keys(userProjectsMap).length > 0 && (
@@ -2131,6 +2651,11 @@ export default function App() {
         onDeny={screensharePrompt.onDeny}
       />
 
+      <CalendarReminderModal
+        isOpen={showCalendarReminderModal}
+        onClose={() => setShowCalendarReminderModal(false)}
+      />
+
       <CalendarEscalationModal
         isOpen={showEscalationModal}
         onClose={() => setShowEscalationModal(false)}
@@ -2166,6 +2691,8 @@ export default function App() {
         }
         onDeleteConversation={handleDeleteConversation}
         onDeleteAllHistory={handleDeleteAllHistory}
+        shareCorrectionsWithNic={shareCorrectionsWithNic}
+        onToggleShareCorrections={handleToggleShareCorrections}
       />
 
       <KnowledgeModal

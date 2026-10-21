@@ -211,3 +211,38 @@ export async function dispatchToolsShare(input: ToolsShareInput): Promise<{
   return { ok, anonId };
 }
 
+export interface CorrectionInput {
+  product: string;
+  device?: string;
+  topic: string;
+  notesSay: string;
+  screenShows: string;
+}
+
+export interface CorrectionRecord {
+  id: string;
+  product: string;
+  device: string;
+  topic: string;
+  notesSay: string;
+  screenShows: string;
+}
+
+export async function dispatchCorrection(input: CorrectionInput): Promise<{
+  ok: boolean;
+  id: string;
+}> {
+  const id = `cor-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const record: CorrectionRecord = {
+    id,
+    product: (input.product || 'muse').trim().slice(0, 60),
+    device: (input.device || 'Website').trim().slice(0, 120),
+    topic: (input.topic || '').trim().slice(0, 300),
+    notesSay: (input.notesSay || '').trim().slice(0, 1000),
+    screenShows: (input.screenShows || '').trim().slice(0, 1000),
+  };
+
+  const ok = await postToSheet('correction', record);
+  return { ok, id };
+}
+

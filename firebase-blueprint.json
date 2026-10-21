@@ -17,6 +17,10 @@
           "type": "string",
           "format": "date-time",
           "description": "Timestamp when consent was accepted"
+        },
+        "shareCorrectionsWithNic": {
+          "type": "boolean",
+          "description": "Whether the user opted in to sending text-only screen mismatch notes to Nic"
         }
       },
       "required": ["consentAccepted", "consentVersion"]
@@ -198,12 +202,40 @@
         }
       },
       "required": ["contract", "rung", "status", "history", "createdAt", "updatedAt"]
+    },
+    "AuditRun": {
+      "title": "AuditRun",
+      "description": "One check-up scorecard audit document per run of a check-up routine",
+      "type": "object",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "description": "Check-up routine ID (e.g. safety-audit, weekly-review)"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "results": {
+          "type": "object",
+          "description": "Map of area (connections, approvals, scheduled, memory, activity, privacy, money) to { rating, reason }"
+        },
+        "fixList": {
+          "type": "array",
+          "description": "Up to three priority fix items from the check-up summary"
+        }
+      },
+      "required": ["appId", "startedAt", "results"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/User" },
-      "description": "Root user document storing consent state"
+      "description": "Root user document storing consent state and preferences"
     },
     "/users/{userId}/notes/{noteId}": {
       "schema": { "$ref": "#/entities/SessionNote" },
@@ -228,6 +260,10 @@
     "/users/{userId}/projects/{projectId}": {
       "schema": { "$ref": "#/entities/ProjectContract" },
       "description": "Per-user saved project task contracts and autonomy ladder state"
+    },
+    "/users/{userId}/audits/{auditId}": {
+      "schema": { "$ref": "#/entities/AuditRun" },
+      "description": "Per-user check-up audit runs and scorecards"
     }
   }
 }

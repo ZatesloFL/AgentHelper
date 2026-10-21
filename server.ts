@@ -28,8 +28,14 @@ import {
   rateLimitReportDraft,
   rateLimitToolsShare,
   recordToolsShareSuccess,
+  rateLimitCorrections,
+  recordCorrectionSendSuccess,
 } from './server/rate-limit.js';
-import { dispatchHandoffReport, dispatchToolsShare } from './server/escalations.js';
+import {
+  dispatchHandoffReport,
+  dispatchToolsShare,
+  dispatchCorrection,
+} from './server/escalations.js';
 import { setupLiveWebSocket } from './server/live-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -102,6 +108,7 @@ async function startServer() {
         sessionNotes,
         toolsProfile,
         userProjects,
+        latestAudit,
       } = req.body || {};
 
       if (!isKnownProduct(product)) {
@@ -151,6 +158,7 @@ async function startServer() {
           : [],
         toolsProfile: toolsProfile && typeof toolsProfile === 'object' ? toolsProfile : null,
         userProjects: Array.isArray(userProjects) ? userProjects : null,
+        latestAudit: latestAudit && typeof latestAudit === 'object' ? latestAudit : null,
       });
       res.json(result);
     } catch (err: any) {
@@ -309,6 +317,62 @@ async function startServer() {
       return res.status(502).json({
         ok: false,
         error: "Couldn't share your anonymous tool list right now. Your profile is still saved to your account.",
+      });
+    }
+  });
+
+  // Opt-in Knowledge Mismatch Corrections to Nic (20 sends per day per uid; no name, email, or images)
+  app.post('/api/corrections', rateLimitCorrections, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const product = typeof body.product === 'string' ? body.product : 'muse';
+      if (!isKnownProduct(product)) {
+        return res.status(400).json({ error: `Unknown product "${product}".` });
+      }
+
+      const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
+      const notesSay =
+        typeof body.notesSay === 'string'
+          ? body.notesSay.trim()
+          : typeof body.notes_say === 'string'
+          ? body.notes_say.trim()
+          : '';
+      const screenShows =
+        typeof body.screenShows === 'string'
+          ? body.screenShows.trim()
+          : typeof body.screen_shows === 'string'
+          ? body.screen_shows.trim()
+          : '';
+      const device = typeof body.device === 'string' && body.device.trim() ? body.device.trim() : 'Website';
+
+      if (!topic) {
+        return res.status(400).json({ ok: false, error: 'Missing topic for correction note.' });
+      }
+
+      const result = await dispatchCorrection({
+        product,
+        device,
+        topic,
+        notesSay,
+        screenShows,
+      });
+
+      if (!result.ok) {
+        return res.status(502).json({
+          ok: false,
+          error: "Couldn't send the mismatch note to Nic right now.",
+        });
+      }
+
+      recordCorrectionSendSuccess(req.user!.uid);
+      return res.json({
+        ok: true,
+        id: result.id,
+      });
+    } catch (err: any) {
+      return res.status(502).json({
+        ok: false,
+        error: "Couldn't send the mismatch note to Nic right now.",
       });
     }
   });

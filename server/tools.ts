@@ -247,6 +247,63 @@ export const toolDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'record_audit_result',
+    description:
+      'Records the check-up audit rating ("green", "amber", or "red") and plain-language reason for a specific safety area after completing a check-up step in safety-audit or weekly-review.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        app_id: {
+          type: Type.STRING,
+          description: 'The check-up routine ID ("safety-audit" or "weekly-review").',
+        },
+        area: {
+          type: Type.STRING,
+          description:
+            'The audit area covered by the step: "connections", "approvals", "scheduled", "memory", "activity", "privacy", or "money".',
+          enum: ['connections', 'approvals', 'scheduled', 'memory', 'activity', 'privacy', 'money'],
+        },
+        rating: {
+          type: Type.STRING,
+          description: 'The safety rating for this area based on the step rating guide.',
+          enum: ['green', 'amber', 'red'],
+        },
+        reason: {
+          type: Type.STRING,
+          description: 'A short, plain-language reason explaining why this area is green, amber, or red.',
+        },
+      },
+      required: ['app_id', 'area', 'rating', 'reason'],
+    },
+  },
+  {
+    name: 'report_knowledge_mismatch',
+    description:
+      'Reports a mismatch when the user\'s screen or menu differs from the guide\'s notes. Call this in addition to save_session_note whenever the screen disagrees with your notes.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        topic: {
+          type: Type.STRING,
+          description: 'Short label for the feature, menu, or setting that differs (e.g. "Connectors menu path").',
+        },
+        notes_say: {
+          type: Type.STRING,
+          description: 'What the guide\'s product notes expected.',
+        },
+        screen_shows: {
+          type: Type.STRING,
+          description: 'What the user\'s screen actually shows.',
+        },
+        device: {
+          type: Type.STRING,
+          description: 'Which device or surface the user is on (e.g. "Website", "iPhone", "Android", "Mac app", "WhatsApp").',
+        },
+      },
+      required: ['topic', 'notes_say', 'screen_shows'],
+    },
+  },
+  {
     name: 'save_session_note',
     description:
       'Saves a brief text note (max 500 characters) attached to the current user and product for subsequent continuity.',
@@ -483,6 +540,68 @@ export function executeServerTool(
         instruction: cappedAtRung2
           ? 'Note: Because this project includes purchases, public posts, or sending to others in its Do list, it cannot go past rung 2 (Act with approval). Explain why plainly to the user.'
           : undefined,
+      };
+    }
+
+    case 'record_audit_result': {
+      const appId =
+        typeof safeArgs.app_id === 'string' && safeArgs.app_id.trim()
+          ? safeArgs.app_id.trim()
+          : 'safety-audit';
+      const validAreas = new Set([
+        'connections',
+        'approvals',
+        'scheduled',
+        'memory',
+        'activity',
+        'privacy',
+        'money',
+      ]);
+      const rawArea = typeof safeArgs.area === 'string' ? safeArgs.area.trim().toLowerCase() : '';
+      const area = validAreas.has(rawArea) ? rawArea : 'connections';
+      const rawRating =
+        typeof safeArgs.rating === 'string' ? safeArgs.rating.trim().toLowerCase() : 'amber';
+      const rating: 'green' | 'amber' | 'red' =
+        rawRating === 'green' || rawRating === 'amber' || rawRating === 'red'
+          ? rawRating
+          : 'amber';
+      const reason =
+        typeof safeArgs.reason === 'string' && safeArgs.reason.trim()
+          ? safeArgs.reason.trim().slice(0, 500)
+          : '';
+
+      return {
+        recorded: true,
+        app_id: appId,
+        area,
+        rating,
+        reason,
+      };
+    }
+
+    case 'report_knowledge_mismatch': {
+      const topic =
+        typeof safeArgs.topic === 'string' && safeArgs.topic.trim()
+          ? safeArgs.topic.trim().slice(0, 300)
+          : 'menu or setting';
+      const notesSay =
+        typeof safeArgs.notes_say === 'string' ? safeArgs.notes_say.trim().slice(0, 1000) : '';
+      const screenShows =
+        typeof safeArgs.screen_shows === 'string'
+          ? safeArgs.screen_shows.trim().slice(0, 1000)
+          : '';
+      const device =
+        normalizeDeviceName(safeArgs.device) ||
+        (typeof safeArgs.device === 'string' && safeArgs.device.trim()
+          ? safeArgs.device.trim().slice(0, 100)
+          : 'Website');
+
+      return {
+        reported: true,
+        topic,
+        notes_say: notesSay,
+        screen_shows: screenShows,
+        device,
       };
     }
 
