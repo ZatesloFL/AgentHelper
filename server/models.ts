@@ -325,16 +325,45 @@ export async function handleTextChat(payload: {
     }
   }
 
+  let response: any;
+  let activeTextModel = config.textModel;
+  const candidateModels = Array.from(new Set(['gemini-3-flash-preview', config.textModel, 'gemini-3.5-flash', 'gemini-3.8-flash']));
+
   try {
-    const response = await ai.models.generateContent({
-      model: config.textModel,
-      contents: cleanedTurns,
-      config: {
-        systemInstruction,
-        temperature: 0.7,
-        tools: [{ functionDeclarations: toolDeclarations }],
-      },
-    });
+    let lastError: any = null;
+    for (const modelToTry of candidateModels) {
+      try {
+        response = await ai.models.generateContent({
+          model: modelToTry,
+          contents: cleanedTurns,
+          config: {
+            systemInstruction,
+            temperature: 0.7,
+            tools: [{ functionDeclarations: toolDeclarations }],
+          },
+        });
+        activeTextModel = modelToTry;
+        lastError = null;
+        break;
+      } catch (err: any) {
+        lastError = err;
+        if (
+          err?.status === 429 ||
+          err?.status === 503 ||
+          err?.message?.includes('quota') ||
+          err?.message?.includes('RESOURCE_EXHAUSTED') ||
+          err?.message?.includes('high demand')
+        ) {
+          console.warn(`Model ${modelToTry} experienced rate limits or high demand, trying next candidate...`);
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!response && lastError) {
+      throw lastError;
+    }
 
     const functionCalls = response.functionCalls;
     const toolInvocations: Array<{ name: string; args: any; result: any }> = [];
@@ -393,12 +422,12 @@ export async function handleTextChat(payload: {
       if (!textReply.trim()) {
         try {
           const continuationResponse = await ai.models.generateContent({
-            model: config.textModel,
+            model: activeTextModel,
             contents: [
               ...cleanedTurns,
               {
                 role: 'model',
-                parts: functionCalls.map(fc => ({ functionCall: fc })),
+                parts: functionCalls.map((fc: any) => ({ functionCall: fc })),
               },
               {
                 role: 'user',
@@ -422,10 +451,29 @@ export async function handleTextChat(payload: {
     }
 
     if (!textReply.trim()) {
-      if (toolInvocations.some(t => t.name === 'propose_times' || t.name === 'get_booking_link')) {
+      const updateTool = toolInvocations.find(t => t.name === 'update_routine_progress');
+      const launchTool = toolInvocations.find(t => t.name === 'launch_app');
+
+      if (updateTool) {
+        const { app_id, completed_step, next_step } = updateTool.result || {};
+        const apps = getGuidedApps(product);
+        const app = apps.find(a => a.id === app_id);
+        if (next_step && app) {
+          const nextStepObj = app.steps.find(s => s.number === next_step);
+          const nextInquiry = nextStepObj?.coachPrompt || nextStepObj?.detail || '';
+          textReply = `Great, Step ${completed_step} is confirmed! Let's move to Step ${next_step}: ${nextStepObj?.title || ''}.\n\n${nextInquiry}`;
+        } else {
+          textReply = `All steps in this routine are now complete! I've noted down your safeguards so you are all set.`;
+        }
+      } else if (launchTool) {
+        const appId = launchTool.args?.app_id;
+        const apps = getGuidedApps(product);
+        const app = apps.find(a => a.id === appId);
+        const step1 = app?.steps[0];
+        const step1Inquiry = step1?.coachPrompt || step1?.detail || '';
+        textReply = `I've opened the roadmap for ${app?.title || 'your routine'}. Let's take it one step at a time:\n\n${step1Inquiry}`;
+      } else if (toolInvocations.some(t => t.name === 'propose_times' || t.name === 'get_booking_link')) {
         textReply = `I've checked Nic's live calendar. You can select one of the suggested times below or use his direct booking link.`;
-      } else if (toolInvocations.some(t => t.name === 'launch_app')) {
-        textReply = `I've opened the guided routine for you right here. Let's take it step by step.`;
       } else if (toolInvocations.some(t => t.name === 'request_screenshare')) {
         textReply = `Whenever you're ready, sharing your screen will let me see what's on display so we can walk through it together.`;
       } else {

@@ -43,7 +43,7 @@ export const config: AppConfig = {
   appUrl: process.env.APP_URL || 'http://localhost:3000',
   liveModel: process.env.LIVE_MODEL || 'gemini-3.8-live',
   liveModelDeep: process.env.LIVE_MODEL_DEEP || 'gemini-3.8-live-extended-thinking',
-  textModel: process.env.TEXT_MODEL || 'gemini-3.8-flash',
+  textModel: process.env.TEXT_MODEL || 'gemini-3-flash-preview',
   calendarIcsUrl: process.env.CALENDAR_ICS_URL || '',
   bookingUrl: defaultBookingUrl,
   calUsername: process.env.CAL_USERNAME || parsedCal.username,
