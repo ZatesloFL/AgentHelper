@@ -1,14 +1,20 @@
 import React, { useState } from 'react';
 import { authService, AuthUser } from '../lib/firebase.js';
-import { X, Shield, User, ArrowRight } from 'lucide-react';
+import { X } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
-  onClose: () => void;
+  onClose?: () => void;
+  canClose?: boolean;
   onSuccess: (user: AuthUser) => void;
 }
 
-export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export const LoginModal: React.FC<LoginModalProps> = ({
+  isOpen,
+  onClose,
+  canClose = false,
+  onSuccess,
+}) => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,19 +26,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     try {
       const u = await authService.signInWithGoogle();
       onSuccess(u);
-      onClose();
+      if (onClose) onClose();
     } catch (err: any) {
       console.warn('Google sign-in error:', err);
-      setError(err.message || 'Unable to complete sign-in. You can test as guest.');
+      setError(err.message || 'Unable to complete Google sign-in. Please try again.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleGuestSignIn = () => {
-    const u = authService.signInAsGuest('Guest Explorer');
-    onSuccess(u);
-    onClose();
   };
 
   return (
@@ -47,16 +47,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
               Sign In to Calm Guide
             </h3>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 text-[#78716C] hover:text-[#1C1917] transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {canClose && onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 text-[#78716C] hover:text-[#1C1917] transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <p className="text-xs text-[#57534E] leading-relaxed">
-          Sign in allows the guide to remember your setup progress and saved session notes across visits.
+          Please sign in with Google so your notes and progress are saved to you, and so Nic can reply to you.
         </p>
 
         {error && (
@@ -66,7 +68,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
         )}
 
         <div className="space-y-2.5 pt-2">
-          {/* Sign in with Google */}
           <button
             onClick={handleGoogleSignIn}
             disabled={loading}
@@ -92,23 +93,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
             </svg>
             <span>{loading ? 'Connecting...' : 'Sign in with Google'}</span>
           </button>
-
-          <div className="relative my-3 text-center">
-            <span className="bg-[#FBF9F5] px-2 text-[10px] text-[#A8A29E] font-mono uppercase tracking-wider relative z-10">
-              or test directly
-            </span>
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-[#E6DFD3]" />
-            </div>
-          </div>
-
-          <button
-            onClick={handleGuestSignIn}
-            className="w-full py-2 px-3 bg-[#F4F0E8] hover:bg-[#EAE4D7] border border-[#E6DFD3] text-[#57534E] rounded-lg text-xs font-normal flex items-center justify-center gap-1.5 transition-colors"
-          >
-            <User className="w-3.5 h-3.5" />
-            <span>Continue as Guest</span>
-          </button>
         </div>
 
         <p className="text-[10px] text-[#78716C] text-center pt-2">
@@ -118,3 +102,4 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSucce
     </div>
   );
 };
+

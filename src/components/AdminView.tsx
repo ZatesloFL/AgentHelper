@@ -1,44 +1,33 @@
 import React, { useState, useEffect } from 'react';
+import { authFetch, AuthUser } from '../lib/firebase.js';
 import {
   Lock,
   AlertTriangle,
   CheckCircle,
-  FileText,
-  Clock,
   ArrowLeft,
   RefreshCw,
   Sparkles,
   ExternalLink,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
-
-interface EscalationRecord {
-  id: string;
-  timestamp: string;
-  userName: string;
-  userEmail: string;
-  product: string;
-  goal: string;
-  tried: string;
-  screenSeen: string;
-  blocker: string;
-  proposedTimes: Array<{ displayFormatted?: string }>;
-  transcriptExcerpt: Array<{ role: string; text: string }>;
-}
 
 interface AdminData {
   health: {
     checkedAt: string;
     liveModel: string;
     textModel: string;
+    textModelFallback?: string | null;
     liveModelOk: boolean;
     textModelOk: boolean;
+    textModelFallbackOk?: boolean;
     liveAvailable: boolean;
     newerLiveModelSuggestion: string | null;
     warningMessage: string | null;
+    thinkingLevels?: {
+      chat: 'low' | 'high';
+      summary: 'low' | 'high';
+      reportDraft: 'low' | 'high';
+    };
   };
-  escalations: EscalationRecord[];
   knowledgeFiles: Array<{
     product: string;
     title: string;
@@ -51,78 +40,71 @@ interface AdminData {
   }>;
   config: {
     liveModel: string;
-    liveModelDeep: string;
     textModel: string;
-    calendarIcsUrlSet: boolean;
+    textModelFallback?: string | null;
+    thinkingLevels?: {
+      chat: 'low' | 'high';
+      summary: 'low' | 'high';
+      reportDraft: 'low' | 'high';
+    };
     bookingUrl: string;
-    escalationWebhookUrlSet: boolean;
+    sheetUrl: string;
+    sheetWebhookUrlSet: boolean;
     ownerEmail: string;
     ownerName: string;
     ownerTimezone: string;
-    workingHours: string;
   };
 }
 
 interface AdminViewProps {
+  user: AuthUser | null;
   onBack: () => void;
 }
 
-export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
-  const [passcode, setPasscode] = useState<string>('');
-  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
+  const [isForbidden, setIsForbidden] = useState<boolean>(false);
   const [adminData, setAdminData] = useState<AdminData | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [expandedEscalationId, setExpandedEscalationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const fetchAdminData = async () => {
     setLoading(true);
-    setAuthError(null);
-
+    setIsForbidden(false);
     try {
-      const res = await fetch('/api/admin/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passcode }),
-      });
-
-      if (!res.ok) {
-        setAuthError('Incorrect passcode.');
+      const res = await authFetch('/api/admin/data');
+      if (res.status === 403 || res.status === 401) {
+        setIsForbidden(true);
         setLoading(false);
         return;
       }
-
-      setIsAuthorized(true);
-      fetchAdminData(passcode);
-    } catch (err: any) {
-      setAuthError('Failed to verify passcode.');
-      setLoading(false);
-    }
-  };
-
-  const fetchAdminData = async (code: string) => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/admin/data', {
-        headers: { 'x-admin-passcode': code },
-      });
       if (res.ok) {
         const data = await res.json();
         setAdminData(data);
+      } else {
+        setIsForbidden(true);
       }
     } catch (err) {
       console.error('Failed to load admin data:', err);
+      setIsForbidden(true);
     } finally {
       setLoading(false);
     }
   };
 
-  const toggleExpand = (id: string) => {
-    setExpandedEscalationId(prev => (prev === id ? null : id));
-  };
+  useEffect(() => {
+    if (user) {
+      fetchAdminData();
+    }
+  }, [user]);
 
-  if (!isAuthorized) {
+  if (loading && !adminData && !isForbidden) {
+    return (
+      <div className="min-h-screen bg-[#FBF9F5] flex items-center justify-center p-4">
+        <div className="text-xs text-[#78716C] font-mono">Checking owner access...</div>
+      </div>
+    );
+  }
+
+  if (isForbidden) {
     return (
       <div className="min-h-screen bg-[#FBF9F5] flex items-center justify-center p-4">
         <div className="bg-white border border-[#E6DFD3] rounded-xl max-w-sm w-full p-6 shadow-md text-[#1C1917] space-y-4">
@@ -132,53 +114,37 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
             </div>
             <div>
               <h3 className="font-editorial text-xl font-medium">Admin Console</h3>
-              <p className="text-xs text-[#78716C]">Passcode protected</p>
             </div>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-[#57534E] mb-1">
-                Enter Admin Passcode:
-              </label>
-              <input
-                type="password"
-                required
-                value={passcode}
-                onChange={(e) => setPasscode(e.target.value)}
-                placeholder="Passcode..."
-                className="w-full px-3 py-2 text-xs bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#9A3412]"
-              />
-            </div>
+          <p className="text-sm text-[#57534E] leading-relaxed">
+            This page is for the site owner.
+          </p>
 
-            {authError && (
-              <p className="text-xs text-red-700 bg-red-50 p-2 rounded">
-                {authError}
-              </p>
-            )}
-
-            <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={onBack}
-                className="text-xs text-[#78716C] hover:text-[#1C1917] flex items-center gap-1"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Return to Guide</span>
-              </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="px-4 py-2 bg-[#1C1917] text-white rounded-lg text-xs font-medium hover:bg-[#292524] transition-colors"
-              >
-                {loading ? 'Verifying...' : 'Unlock'}
-              </button>
-            </div>
-          </form>
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={onBack}
+              className="text-xs text-[#78716C] hover:text-[#1C1917] flex items-center gap-1"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Return to Guide</span>
+            </button>
+          </div>
         </div>
       </div>
     );
   }
+
+  const thinkingLevels = adminData?.health?.thinkingLevels ||
+    adminData?.config?.thinkingLevels || {
+      chat: 'low',
+      summary: 'high',
+      reportDraft: 'high',
+    };
+
+  const fallbackModel =
+    adminData?.health?.textModelFallback ?? adminData?.config?.textModelFallback ?? null;
 
   return (
     <div className="min-h-screen bg-[#FBF9F5] text-[#1C1917]">
@@ -195,13 +161,13 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
           <div>
             <h1 className="font-editorial text-2xl font-medium">Admin & Operations</h1>
             <p className="text-xs text-[#78716C]">
-              Model Health, Escalation Dossiers & Knowledge Freshness
+              Model Health, Thinking Levels, Handoff Reports & Knowledge Freshness
             </p>
           </div>
         </div>
 
         <button
-          onClick={() => fetchAdminData(passcode)}
+          onClick={() => fetchAdminData()}
           disabled={loading}
           className="px-3 py-1.5 bg-[#F4F0E8] border border-[#E6DFD3] rounded text-xs font-medium hover:bg-[#EAE4D7] flex items-center gap-1.5 transition-colors"
         >
@@ -211,12 +177,23 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
       </div>
 
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        {/* Model Health Check Section */}
+        {/* Warning if SHEET_WEBHOOK_URL is not configured */}
+        {adminData && !adminData.config.sheetWebhookUrlSet && (
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
+            <div>
+              <strong className="font-semibold">SHEET_WEBHOOK_URL is not configured:</strong>{' '}
+              The "Send report to Nic" button is currently hidden in the user UI and only the direct booking link is shown. Set <code>SHEET_WEBHOOK_URL</code> and <code>SHEET_WEBHOOK_SECRET</code> in your environment to enable sending handoff reports to Google Sheets.
+            </div>
+          </div>
+        )}
+
+        {/* Model Health Check & Thinking Levels Section */}
         {adminData?.health && (
-          <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs space-y-3">
+          <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-[#1C1917] flex items-center gap-2">
-                <span>Gemini Model Health Status</span>
+                <span>Gemini Model Health & Thinking Configuration</span>
                 {adminData.health.liveAvailable ? (
                   <span className="text-xs font-normal text-[#14532D] bg-[#14532D]/10 px-2 py-0.5 rounded">
                     Active (Live + Text)
@@ -232,7 +209,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
               <div className="p-3 bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[#78716C]">LIVE_MODEL:</span>
@@ -242,7 +219,7 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
                   {adminData.health.liveModelOk ? (
                     <>
                       <CheckCircle className="w-3.5 h-3.5 text-[#14532D]" />
-                      <span className="text-[#14532D]">Found and verified in model catalog</span>
+                      <span className="text-[#14532D]">Exact match in catalog</span>
                     </>
                   ) : (
                     <>
@@ -262,14 +239,81 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
                   {adminData.health.textModelOk ? (
                     <>
                       <CheckCircle className="w-3.5 h-3.5 text-[#14532D]" />
-                      <span className="text-[#14532D]">Ready for chat fallback and summaries</span>
+                      <span className="text-[#14532D]">Exact match in catalog</span>
                     </>
                   ) : (
                     <>
                       <AlertTriangle className="w-3.5 h-3.5 text-[#9A3412]" />
-                      <span className="text-[#9A3412]">Not verified</span>
+                      <span className="text-[#9A3412]">Not found in catalog</span>
                     </>
                   )}
+                </div>
+              </div>
+
+              <div className="p-3 bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[#78716C]">TEXT_MODEL_FALLBACK:</span>
+                  <span className="font-semibold text-[#1C1917]">
+                    {fallbackModel || 'None (not set)'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 pt-1">
+                  {!fallbackModel ? (
+                    <span className="text-[#78716C]">Optional (used on 429/503 after retry)</span>
+                  ) : adminData.health.textModelFallbackOk ? (
+                    <>
+                      <CheckCircle className="w-3.5 h-3.5 text-[#14532D]" />
+                      <span className="text-[#14532D]">Exact match in catalog</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-3.5 h-3.5 text-[#9A3412]" />
+                      <span className="text-[#9A3412]">Not found in catalog</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Automatic Thinking Levels per Text Task */}
+            <div className="p-3.5 bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-[#1C1917]">
+                  Automatic Thinking Level per Text Task
+                </span>
+                <span className="text-[11px] text-[#78716C] font-mono">
+                  Set in code · Never sent to live voice model
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <div className="p-2.5 bg-white border border-[#E6DFD3] rounded flex items-center justify-between">
+                  <div>
+                    <span className="font-mono font-semibold text-[#1C1917] block">chat</span>
+                    <span className="text-[10px] text-[#78716C]">POST /api/chat</span>
+                  </div>
+                  <span className="font-mono uppercase px-2 py-0.5 rounded bg-[#F4F0E8] border border-[#E6DFD3] text-[#1C1917] font-semibold">
+                    {thinkingLevels.chat}
+                  </span>
+                </div>
+
+                <div className="p-2.5 bg-white border border-[#E6DFD3] rounded flex items-center justify-between">
+                  <div>
+                    <span className="font-mono font-semibold text-[#1C1917] block">summary</span>
+                    <span className="text-[10px] text-[#78716C]">POST /api/summarize</span>
+                  </div>
+                  <span className="font-mono uppercase px-2 py-0.5 rounded bg-[#14532D]/10 border border-[#14532D]/20 text-[#14532D] font-semibold">
+                    {thinkingLevels.summary}
+                  </span>
+                </div>
+
+                <div className="p-2.5 bg-white border border-[#E6DFD3] rounded flex items-center justify-between">
+                  <div>
+                    <span className="font-mono font-semibold text-[#1C1917] block">reportDraft</span>
+                    <span className="text-[10px] text-[#78716C]">POST /api/report/draft</span>
+                  </div>
+                  <span className="font-mono uppercase px-2 py-0.5 rounded bg-[#14532D]/10 border border-[#14532D]/20 text-[#14532D] font-semibold">
+                    {thinkingLevels.reportDraft}
+                  </span>
                 </div>
               </div>
             </div>
@@ -344,104 +388,31 @@ export const AdminView: React.FC<AdminViewProps> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* Escalations List (Newest First) */}
-        <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
+        {/* Handoff Reports (Google Sheet) */}
+        <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="space-y-1">
             <h2 className="text-base font-semibold text-[#1C1917]">
-              Escalation Logs ({adminData?.escalations.length || 0})
+              Handoff Reports
             </h2>
-            <span className="text-xs text-[#78716C]">Newest first · Logged to data/escalations.jsonl</span>
+            <p className="text-xs text-[#78716C]">
+              User-approved handoff reports are sent directly to your configured Google Sheet.
+            </p>
           </div>
 
-          {!adminData || adminData.escalations.length === 0 ? (
-            <p className="text-xs text-[#78716C] italic py-4 text-center">
-              No escalations recorded yet.
-            </p>
+          {adminData?.config.sheetUrl ? (
+            <a
+              href={adminData.config.sheetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium rounded-lg inline-flex items-center gap-2 transition-colors shrink-0"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>Open handoff reports (Google Sheet)</span>
+            </a>
           ) : (
-            <div className="space-y-3">
-              {adminData.escalations.map((esc) => {
-                const isExpanded = expandedEscalationId === esc.id;
-
-                return (
-                  <div
-                    key={esc.id}
-                    className="p-4 bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg text-xs space-y-2 hover:border-[#D6CEBE] transition-colors"
-                  >
-                    <div
-                      className="flex items-center justify-between cursor-pointer"
-                      onClick={() => toggleExpand(esc.id)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="font-semibold text-[#1C1917]">{esc.userName}</span>
-                        <span className="text-[#78716C] font-mono text-[11px]">{esc.userEmail}</span>
-                        <span className="px-1.5 py-0.5 bg-[#E6DFD3] text-[#1C1917] rounded text-[10px] uppercase font-mono">
-                          {esc.product}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-[#78716C] font-mono">
-                          {new Date(esc.timestamp).toLocaleString()}
-                        </span>
-                        {isExpanded ? (
-                          <ChevronUp className="w-4 h-4 text-[#78716C]" />
-                        ) : (
-                          <ChevronDown className="w-4 h-4 text-[#78716C]" />
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="text-[#292524] text-xs">
-                      <strong>Blocker:</strong> {esc.blocker}
-                    </div>
-
-                    {isExpanded && (
-                      <div className="mt-3 pt-3 border-t border-[#E6DFD3] space-y-2.5 text-[11px]">
-                        <div>
-                          <strong className="text-[#57534E]">User Goal:</strong> {esc.goal}
-                        </div>
-                        <div>
-                          <strong className="text-[#57534E]">What was tried:</strong> {esc.tried}
-                        </div>
-                        <div>
-                          <strong className="text-[#57534E]">Screen Observation (Text Only):</strong>{' '}
-                          {esc.screenSeen}
-                        </div>
-
-                        {esc.proposedTimes && esc.proposedTimes.length > 0 && (
-                          <div>
-                            <strong className="text-[#57534E]">Proposed Slots:</strong>
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              {esc.proposedTimes.map((pt, idx) => (
-                                <span
-                                  key={idx}
-                                  className="px-2 py-0.5 bg-white border border-[#E6DFD3] rounded font-mono text-[10px]"
-                                >
-                                  {pt.displayFormatted}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {esc.transcriptExcerpt && esc.transcriptExcerpt.length > 0 && (
-                          <div className="mt-2">
-                            <strong className="text-[#57534E]">Transcript Excerpt (Last Turns):</strong>
-                            <div className="mt-1 max-h-48 overflow-y-auto bg-white p-2.5 border border-[#E6DFD3] rounded space-y-1 text-[10px] font-mono">
-                              {esc.transcriptExcerpt.map((t, idx) => (
-                                <div key={idx} className="flex gap-2">
-                                  <span className="text-[#9A3412] font-semibold uppercase">{t.role}:</span>
-                                  <span className="text-[#292524]">{t.text}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <span className="text-xs text-[#78716C] font-mono bg-[#FBF9F5] border border-[#E6DFD3] px-3 py-2 rounded-lg">
+              Set SHEET_URL in environment to enable direct link
+            </span>
           )}
         </div>
       </div>

@@ -1,96 +1,128 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { config } from './config.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '..');
-const escalationsFilePath = path.join(rootDir, 'data', 'escalations.jsonl');
-
-export interface EscalationPayload {
-  id?: string;
-  timestamp?: string;
+export interface HandoffReportInput {
   userName: string;
   userEmail: string;
   product: string;
   goal: string;
   tried: string;
-  screenSeen: string; // Text description only, never images
   blocker: string;
-  proposedTimes: Array<{ displayFormatted?: string; startIso?: string }>;
-  transcriptExcerpt: Array<{ role: string; text: string }>; // Last 20 turns
+  includeTranscript?: boolean;
+  transcript?: Array<{ role: string; text: string }> | string;
+  routineProgress?: string;
+  progressSummary?: string;
 }
 
-export async function logAndDispatchEscalation(payload: EscalationPayload): Promise<{ success: boolean; id: string; webhookSent: boolean; message: string }> {
-  const id = `esc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-  const timestamp = new Date().toISOString();
-
-  const record = {
-    id,
-    timestamp,
-    userName: payload.userName || 'Anonymous Visitor',
-    userEmail: payload.userEmail || 'Not provided',
-    product: payload.product || 'muse',
-    goal: payload.goal || 'General assistance',
-    tried: payload.tried || 'Walked through initial guidance',
-    screenSeen: payload.screenSeen || 'No active screen shared',
-    blocker: payload.blocker || 'Human review requested',
-    proposedTimes: payload.proposedTimes || [],
-    transcriptExcerpt: (payload.transcriptExcerpt || []).slice(-20),
-  };
-
-  // Ensure data dir exists
-  const dataDir = path.join(rootDir, 'data');
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  // Append JSON line
-  fs.appendFileSync(escalationsFilePath, JSON.stringify(record) + '\n', 'utf-8');
-
-  let webhookSent = false;
-  if (config.escalationWebhookUrl) {
-    try {
-      const response = await fetch(config.escalationWebhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record),
-      });
-      webhookSent = response.ok;
-    } catch (err) {
-      console.error('Failed to dispatch escalation webhook:', err);
-    }
-  }
-
-  return {
-    success: true,
-    id,
-    webhookSent,
-    message: `Handoff summary successfully prepared for ${config.ownerName}.`,
-  };
+export interface HandoffReportRecord {
+  id: string;
+  timestamp: string;
+  userName: string;
+  userEmail: string;
+  product: string;
+  goal: string;
+  tried: string;
+  blocker: string;
+  routineProgress: string;
+  progressSummary: string;
+  transcript: string;
 }
 
-export function getEscalations(): EscalationPayload[] {
-  if (!fs.existsSync(escalationsFilePath)) {
-    return [];
+function formatTextTranscript(
+  includeTranscript: boolean | undefined,
+  rawTranscript: Array<{ role: string; text: string }> | string | undefined
+): string {
+  if (includeTranscript === false || !rawTranscript) {
+    return '';
+  }
+
+  if (typeof rawTranscript === 'string') {
+    return rawTranscript
+      .split('\n')
+      .slice(-20)
+      .join('\n')
+      .slice(0, 12000);
+  }
+
+  if (!Array.isArray(rawTranscript)) {
+    return '';
+  }
+
+  return rawTranscript
+    .slice(-20)
+    .map(entry => {
+      const rawRole = typeof entry?.role === 'string' ? entry.role.trim() : 'user';
+      const roleLabel =
+        rawRole === 'guide' || rawRole === 'model'
+          ? 'Guide'
+          : rawRole === 'system'
+          ? 'System'
+          : 'User';
+      const cleanText = typeof entry?.text === 'string' ? entry.text.replace(/\s+/g, ' ').trim().slice(0, 1000) : '';
+      return cleanText ? `${roleLabel}: ${cleanText}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function postToSheetWebhookOnce(report: HandoffReportRecord): Promise<boolean> {
+  if (!config.sheetWebhookUrl) {
+    return false;
   }
 
   try {
-    const raw = fs.readFileSync(escalationsFilePath, 'utf-8');
-    const lines = raw.split('\n').filter(l => l.trim().length > 0);
-    const records = lines.map(l => {
-      try {
-        return JSON.parse(l);
-      } catch {
-        return null;
-      }
-    }).filter(Boolean);
+    const response = await fetch(config.sheetWebhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      redirect: 'follow',
+      body: JSON.stringify({
+        secret: config.sheetWebhookSecret,
+        report,
+      }),
+    });
 
-    // Return newest first
-    return records.reverse();
+    const text = await response.text();
+    const parsed = JSON.parse(text);
+    return parsed && parsed.ok === true;
   } catch (err) {
-    console.error('Error reading escalations.jsonl:', err);
-    return [];
+    console.warn('Sheet webhook attempt failed:', err);
+    return false;
   }
 }
+
+export async function dispatchHandoffReport(input: HandoffReportInput): Promise<{
+  ok: boolean;
+  id: string;
+}> {
+  const id = `rep-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const timestamp = new Date().toISOString();
+
+  const report: HandoffReportRecord = {
+    id,
+    timestamp,
+    userName: input.userName || 'Friend',
+    userEmail: input.userEmail || '',
+    product: input.product || 'muse',
+    goal: (input.goal || '').trim().slice(0, 2000),
+    tried: (input.tried || '').trim().slice(0, 2000),
+    blocker: (input.blocker || '').trim().slice(0, 2000),
+    routineProgress: (input.routineProgress || '').trim().slice(0, 1000),
+    progressSummary: (input.progressSummary || '').trim().slice(0, 2000),
+    transcript: formatTextTranscript(input.includeTranscript, input.transcript),
+  };
+
+  if (!config.sheetWebhookUrl) {
+    return { ok: false, id };
+  }
+
+  // Attempt 1
+  const firstAttemptOk = await postToSheetWebhookOnce(report);
+  if (firstAttemptOk) {
+    return { ok: true, id };
+  }
+
+  // Retry once after 2 seconds
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  const secondAttemptOk = await postToSheetWebhookOnce(report);
+  return { ok: secondAttemptOk, id };
+}
+

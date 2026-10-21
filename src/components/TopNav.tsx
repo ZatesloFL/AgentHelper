@@ -6,7 +6,7 @@ interface TopNavProps {
   user: AuthUser | null;
   currentProduct: string;
   onSelectProduct: (product: string) => void;
-  availableProducts: Array<{ id: string; title: string }>;
+  availableProducts: Array<{ id: string; name?: string; title?: string }>;
   onOpenKnowledge: () => void;
   onOpenApps: () => void;
   onOpenNotes: () => void;
@@ -40,21 +40,23 @@ export const TopNav: React.FC<TopNavProps> = ({
           Calm Guide
         </a>
 
-        {/* Product selector */}
-        <div className="hidden sm:flex items-center text-xs text-[#78716C] border-l border-[#E6DFD3] pl-4">
-          <span className="mr-2">Product:</span>
-          <select
-            value={currentProduct}
-            onChange={(e) => onSelectProduct(e.target.value)}
-            className="bg-[#F4F0E8] border border-[#E6DFD3] rounded px-2.5 py-1 text-xs text-[#1C1917] font-medium focus:outline-none focus:ring-1 focus:ring-[#9A3412]"
-          >
-            {availableProducts.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Product selector (hidden when only one product is enabled) */}
+        {availableProducts.length > 1 && (
+          <div className="hidden sm:flex items-center text-xs text-[#78716C] border-l border-[#E6DFD3] pl-4">
+            <span className="mr-2">Product:</span>
+            <select
+              value={currentProduct}
+              onChange={(e) => onSelectProduct(e.target.value)}
+              className="bg-[#F4F0E8] border border-[#E6DFD3] rounded px-2.5 py-1 text-xs text-[#1C1917] font-medium focus:outline-none focus:ring-1 focus:ring-[#9A3412]"
+            >
+              {availableProducts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name || p.title || p.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Zone 2: Clean single-line text navigation links */}

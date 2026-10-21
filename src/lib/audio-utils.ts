@@ -1,54 +1,145 @@
 /**
  * Audio processing utilities for Gemini Live API:
- * - 16kHz 16-bit mono PCM input
- * - 24kHz 16-bit mono PCM output with gapless scheduled playback
+ * - AudioWorklet mic capture outputting 16 kHz 16-bit mono PCM in ~100 ms chunks (1600 samples)
+ * - 24 kHz 16-bit mono PCM output with gapless scheduled playback
  * - Instant queue flush on barge-in
  */
 
-/**
- * Resamples a Float32Array from inputSampleRate to 16000 Hz,
- * then converts to 16-bit PCM little-endian base64.
- */
-export function float32To16kHzPcmBase64(
-  inputData: Float32Array,
-  inputSampleRate: number
-): string {
-  const targetSampleRate = 16000;
-  let resampledData: Float32Array;
+const WORKLET_PROCESSOR_NAME = 'calm-guide-pcm16-worklet';
 
-  if (inputSampleRate === targetSampleRate) {
-    resampledData = inputData;
-  } else {
-    const ratio = inputSampleRate / targetSampleRate;
-    const newLength = Math.round(inputData.length / ratio);
-    resampledData = new Float32Array(newLength);
+const WORKLET_SOURCE = `
+class CalmGuidePcm16Worklet extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.targetRate = 16000;
+    this.chunkSamples = 1600; // 100 ms at 16 kHz
+    this.buffer = new Int16Array(this.chunkSamples);
+    this.writeIndex = 0;
+    this.readPhase = 0;
+    this.lastSample = 0;
+    this.hasLastSample = false;
+  }
 
-    for (let i = 0; i < newLength; i++) {
-      const originalIndex = i * ratio;
-      const indexFloor = Math.floor(originalIndex);
-      const indexCeil = Math.min(inputData.length - 1, indexFloor + 1);
-      const fraction = originalIndex - indexFloor;
-      resampledData[i] = inputData[indexFloor] * (1 - fraction) + inputData[indexCeil] * fraction;
+  appendSample(floatSample) {
+    const s = Math.max(-1, Math.min(1, floatSample));
+    this.buffer[this.writeIndex++] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    if (this.writeIndex >= this.chunkSamples) {
+      const out = this.buffer;
+      this.buffer = new Int16Array(this.chunkSamples);
+      this.writeIndex = 0;
+      this.port.postMessage(out.buffer, [out.buffer]);
     }
   }
 
-  // Convert to 16-bit integer PCM
-  const buffer = new ArrayBuffer(resampledData.length * 2);
-  const view = new DataView(buffer);
-  for (let i = 0; i < resampledData.length; i++) {
-    // Clamp to [-1, 1]
-    const s = Math.max(-1, Math.min(1, resampledData[i]));
-    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true); // little-endian
-  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0] || input[0].length === 0) {
+      return true;
+    }
+    const channelData = input[0];
+    const inLen = channelData.length;
 
-  // Convert ArrayBuffer to binary string and base64
+    if (sampleRate === this.targetRate) {
+      for (let i = 0; i < inLen; i++) {
+        this.appendSample(channelData[i]);
+      }
+      return true;
+    }
+
+    const step = sampleRate / this.targetRate;
+    if (!this.hasLastSample) {
+      this.lastSample = channelData[0];
+      this.hasLastSample = true;
+    }
+
+    let pos = this.readPhase;
+    while (pos < inLen) {
+      const idxFloor = Math.floor(pos);
+      const frac = pos - idxFloor;
+      const s0 = idxFloor < 0 ? this.lastSample : channelData[idxFloor];
+      const s1 = idxFloor + 1 < inLen ? channelData[idxFloor + 1] : channelData[inLen - 1];
+      const interpolated = s0 + (s1 - s0) * frac;
+      this.appendSample(interpolated);
+      pos += step;
+    }
+
+    this.readPhase = pos - inLen;
+    this.lastSample = channelData[inLen - 1];
+    return true;
+  }
+}
+
+registerProcessor('${WORKLET_PROCESSOR_NAME}', CalmGuidePcm16Worklet);
+`;
+
+/**
+ * Converts a 16-bit PCM ArrayBuffer (little-endian) to base64
+ */
+export function pcm16BufferToBase64(pcmBuffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(pcmBuffer);
   let binary = '';
-  const bytes = new Uint8Array(buffer);
   const len = bytes.byteLength;
   for (let i = 0; i < len; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
+}
+
+export interface MicWorkletController {
+  stop: () => void;
+}
+
+/**
+ * Starts microphone capture using an AudioWorkletNode that outputs 16 kHz 16-bit PCM
+ * in ~100 ms chunks (1600 samples per chunk).
+ */
+export async function startAudioWorkletMicCapture(
+  micStream: MediaStream,
+  onPcmBase64Chunk: (base64Pcm: string) => void
+): Promise<MicWorkletController> {
+  const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+  const audioCtx = new AudioCtxClass({ sampleRate: 16000 });
+  if (audioCtx.state === 'suspended') {
+    await audioCtx.resume();
+  }
+
+  const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' });
+  const workletUrl = URL.createObjectURL(blob);
+
+  try {
+    await audioCtx.audioWorklet.addModule(workletUrl);
+  } finally {
+    URL.revokeObjectURL(workletUrl);
+  }
+
+  const source = audioCtx.createMediaStreamSource(micStream);
+  const workletNode = new AudioWorkletNode(audioCtx, WORKLET_PROCESSOR_NAME);
+
+  workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    if (event.data && event.data.byteLength > 0) {
+      const base64Pcm = pcm16BufferToBase64(event.data);
+      onPcmBase64Chunk(base64Pcm);
+    }
+  };
+
+  source.connect(workletNode);
+
+  return {
+    stop: () => {
+      try {
+        workletNode.port.onmessage = null;
+        workletNode.disconnect();
+      } catch (_) {}
+      try {
+        source.disconnect();
+      } catch (_) {}
+      try {
+        if (audioCtx.state !== 'closed') {
+          audioCtx.close();
+        }
+      } catch (_) {}
+    },
+  };
 }
 
 /**
@@ -59,10 +150,6 @@ export class LiveAudioPlayer {
   private nextStartTime: number = 0;
   private activeSources: AudioBufferSourceNode[] = [];
   private isMuted: boolean = false;
-
-  constructor() {
-    // Will be lazily initialized on user interaction
-  }
 
   private initContext() {
     if (!this.audioCtx || this.audioCtx.state === 'closed') {

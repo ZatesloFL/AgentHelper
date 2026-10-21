@@ -4,6 +4,7 @@ import { X, BookOpen, AlertTriangle, CheckCircle } from 'lucide-react';
 interface KnowledgeModalProps {
   isOpen: boolean;
   onClose: () => void;
+  productName?: string;
   knowledge: {
     product: string;
     title: string;
@@ -20,6 +21,7 @@ interface KnowledgeModalProps {
 export const KnowledgeModal: React.FC<KnowledgeModalProps> = ({
   isOpen,
   onClose,
+  productName,
   knowledge,
 }) => {
   if (!isOpen || !knowledge) return null;
@@ -31,7 +33,7 @@ export const KnowledgeModal: React.FC<KnowledgeModalProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono uppercase tracking-widest text-[#78716C]">
-                Knowledge Pack · {knowledge.product.toUpperCase()}
+                Knowledge Pack · {productName || knowledge.product}
               </span>
               {knowledge.isStale ? (
                 <span className="text-[11px] text-[#9A3412] font-mono flex items-center gap-1">

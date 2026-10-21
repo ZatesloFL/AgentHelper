@@ -1,66 +1,269 @@
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { config } from './config.js';
-import { buildSystemInstruction, getGuidedApps } from './knowledge.js';
-import { proposeTimes } from './calendar.js';
-import { logAndDispatchEscalation } from './escalations.js';
+import {
+  buildSystemInstruction,
+  getGuidedApps,
+  RoutineStatePayload,
+  ProgressSummaryPayload,
+} from './knowledge.js';
+import { getProductById } from './products.js';
+import { toolDeclarations, executeServerTool } from './tools.js';
+
+export { toolDeclarations, executeServerTool };
+
+export type TextTaskType = 'chat' | 'summary' | 'reportDraft';
+
+/**
+ * Automatic thinking level per text request, set in code, never by the user:
+ * - "chat" (/api/chat): low. Fast and cheap; these are short coaching replies.
+ * - "summary" (/api/summarize): high. Accuracy matters, user isn't waiting on it, runs rarely.
+ * - "reportDraft" (/api/report/draft): high.
+ */
+export function thinkingFor(task: TextTaskType): ThinkingLevel {
+  switch (task) {
+    case 'chat':
+      return ThinkingLevel.LOW;
+    case 'summary':
+      return ThinkingLevel.HIGH;
+    case 'reportDraft':
+      return ThinkingLevel.HIGH;
+  }
+}
+
+export function getThinkingLevelsConfig(): Record<TextTaskType, 'low' | 'high'> {
+  return {
+    chat: 'low',
+    summary: 'high',
+    reportDraft: 'high',
+  };
+}
 
 export interface ModelHealthStatus {
   checkedAt: string;
   liveModel: string;
   textModel: string;
+  textModelFallback: string | null;
   liveModelOk: boolean;
   textModelOk: boolean;
+  textModelFallbackOk: boolean;
   liveAvailable: boolean;
   newerLiveModelSuggestion: string | null;
   warningMessage: string | null;
+  thinkingLevels: Record<TextTaskType, 'low' | 'high'>;
   availableModels: string[];
+}
+
+const thinkingWarnings = new Set<string>();
+let baseCatalogWarning: string | null = 'Model health check in progress...';
+
+function composeWarningMessage(): string | null {
+  const parts: string[] = [];
+  if (baseCatalogWarning) {
+    parts.push(baseCatalogWarning);
+  }
+  for (const w of thinkingWarnings) {
+    if (!parts.includes(w)) {
+      parts.push(w);
+    }
+  }
+  return parts.length > 0 ? parts.join(' | ') : null;
+}
+
+function recordThinkingWarning(model: string) {
+  const msg = `Thinking level not supported by ${model}; running without it`;
+  thinkingWarnings.add(msg);
+  currentHealthStatus = {
+    ...currentHealthStatus,
+    warningMessage: composeWarningMessage(),
+  };
 }
 
 export let currentHealthStatus: ModelHealthStatus = {
   checkedAt: new Date().toISOString(),
   liveModel: config.liveModel,
   textModel: config.textModel,
+  textModelFallback: config.textModelFallback || null,
   liveModelOk: false,
   textModelOk: false,
+  textModelFallbackOk: !config.textModelFallback,
   liveAvailable: false,
   newerLiveModelSuggestion: null,
-  warningMessage: 'Model health check in progress...',
+  warningMessage: composeWarningMessage(),
+  thinkingLevels: getThinkingLevelsConfig(),
   availableModels: [],
 };
 
-export const ai = new GoogleGenAI({
-  apiKey: config.geminiApiKey,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+export function getActiveApiKey(): string {
+  return process.env.API_KEY || process.env.GEMINI_API_KEY || config.geminiApiKey || '';
+}
+
+export function getAiClient(): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey: getActiveApiKey(),
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
     },
-  },
-});
+  });
+}
+
+export const ai = getAiClient();
+
+function is429Or503(err: any): boolean {
+  const status = Number(err?.status || err?.code || 0);
+  const msg = String(err?.message || '');
+  return (
+    status === 429 ||
+    status === 503 ||
+    msg.includes('429') ||
+    msg.includes('503') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('high demand')
+  );
+}
+
+function isThinkingRejectedError(err: any): boolean {
+  if (is429Or503(err)) return false;
+  const status = Number(err?.status || err?.code || 0);
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    status === 400 ||
+    msg.includes('thinking') ||
+    msg.includes('thinkinglevel') ||
+    msg.includes('thinking_level') ||
+    msg.includes('thinkingconfig') ||
+    msg.includes('thinking_config') ||
+    msg.includes('not supported') ||
+    msg.includes('invalid argument') ||
+    msg.includes('unknown name')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 /**
- * Validates configured models against the API catalog on start.
+ * Calls a single model with the configured thinkingLevel.
+ * If the model rejects the thinking setting, retries the same request once without thinkingConfig
+ * and records "Thinking level not supported by <model>; running without it" in health status.
+ */
+async function callModelWithThinkingFallback(
+  model: string,
+  contents: any,
+  baseConfig: Record<string, any>,
+  thinkingLevel: ThinkingLevel
+): Promise<any> {
+  const configWithThinking = {
+    ...baseConfig,
+    thinkingConfig: { thinkingLevel },
+  };
+
+  try {
+    return await getAiClient().models.generateContent({
+      model,
+      contents,
+      config: configWithThinking,
+    });
+  } catch (err: any) {
+    if (isThinkingRejectedError(err)) {
+      recordThinkingWarning(model);
+      const { thinkingConfig: _removed, ...configWithoutThinking } = configWithThinking;
+      return await getAiClient().models.generateContent({
+        model,
+        contents,
+        config: configWithoutThinking,
+      });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Primary text model execution:
+ * - Uses TEXT_MODEL as the primary text model.
+ * - On 429/503, retries TEXT_MODEL once after a 1-second backoff.
+ * - If still 429/503 and TEXT_MODEL_FALLBACK is configured, tries TEXT_MODEL_FALLBACK.
+ */
+async function generateTextWithRetryAndFallback(params: {
+  task: TextTaskType;
+  contents: any;
+  config?: Record<string, any>;
+}): Promise<{ response: any; modelUsed: string }> {
+  const primaryModel = config.textModel;
+  const fallbackModel = config.textModelFallback;
+  const thinkingLevel = thinkingFor(params.task);
+  const baseConfig = params.config || {};
+
+  try {
+    const response = await callModelWithThinkingFallback(
+      primaryModel,
+      params.contents,
+      baseConfig,
+      thinkingLevel
+    );
+    return { response, modelUsed: primaryModel };
+  } catch (firstErr: any) {
+    if (!is429Or503(firstErr)) {
+      throw firstErr;
+    }
+
+    // Retry once on primary model after 1-second backoff
+    await sleep(1000);
+    try {
+      const response = await callModelWithThinkingFallback(
+        primaryModel,
+        params.contents,
+        baseConfig,
+        thinkingLevel
+      );
+      return { response, modelUsed: primaryModel };
+    } catch (retryErr: any) {
+      if (is429Or503(retryErr) && fallbackModel && fallbackModel !== primaryModel) {
+        const response = await callModelWithThinkingFallback(
+          fallbackModel,
+          params.contents,
+          baseConfig,
+          thinkingLevel
+        );
+        return { response, modelUsed: fallbackModel };
+      }
+      throw retryErr;
+    }
+  }
+}
+
+/**
+ * Validates configured models against the API catalog on start using exact name matches.
  * If either is missing, flags a warning for /admin and disables live mode (text-only fallback).
  * If a newer version is present, flags it as a suggestion on /admin. Never switches automatically.
  */
 export async function runModelHealthCheck(): Promise<ModelHealthStatus> {
   const timestamp = new Date().toISOString();
-  if (!config.geminiApiKey) {
+  if (!getActiveApiKey()) {
+    baseCatalogWarning =
+      'GEMINI_API_KEY is missing. Add your API key in Secrets to activate AI functions.';
     currentHealthStatus = {
       checkedAt: timestamp,
       liveModel: config.liveModel,
       textModel: config.textModel,
+      textModelFallback: config.textModelFallback || null,
       liveModelOk: false,
       textModelOk: false,
+      textModelFallbackOk: !config.textModelFallback,
       liveAvailable: false,
       newerLiveModelSuggestion: null,
-      warningMessage: 'GEMINI_API_KEY is missing. Add your API key in Secrets to activate AI functions.',
+      warningMessage: composeWarningMessage(),
+      thinkingLevels: getThinkingLevelsConfig(),
       availableModels: [],
     };
     return currentHealthStatus;
   }
 
   try {
-    const listPager = await ai.models.list();
+    const listPager = await getAiClient().models.list();
     const modelNames: string[] = [];
     for await (const m of listPager) {
       if (m.name) {
@@ -68,51 +271,79 @@ export async function runModelHealthCheck(): Promise<ModelHealthStatus> {
       }
     }
 
-    const liveExists = modelNames.some(m => m === config.liveModel || m.includes(config.liveModel));
-    const textExists = modelNames.some(m => m === config.textModel || m.includes(config.textModel));
+    // Exact name matches only (not .includes())
+    const liveExists = modelNames.some(m => m === config.liveModel);
+    const textExists = modelNames.some(m => m === config.textModel);
+    const fallbackExists = config.textModelFallback
+      ? modelNames.some(m => m === config.textModelFallback)
+      : true;
 
-    // Look for newer live models (e.g. gemini-3.8-live-extended-thinking or higher)
+    // Look for newer regular live models (exclude extended-thinking which requires non-blocking tools)
     let suggestion: string | null = null;
-    const liveMatches = modelNames.filter(m => m.includes('live') && !m.includes('legacy') && !m.includes('preview-0'));
+    const liveMatches = modelNames.filter(
+      m =>
+        m.includes('live') &&
+        !m.includes('extended-thinking') &&
+        !m.includes('legacy') &&
+        !m.includes('preview-0')
+    );
     for (const lm of liveMatches) {
       if (lm > config.liveModel) {
         suggestion = lm;
       }
     }
 
-    let warning: string | null = null;
+    const catalogWarnings: string[] = [];
     if (!liveExists && !textExists) {
-      warning = `Configured live model "${config.liveModel}" and text model "${config.textModel}" were not found in the Gemini model catalog. Running in text-only fallback.`;
+      catalogWarnings.push(
+        `Configured live model "${config.liveModel}" and text model "${config.textModel}" were not found in the Gemini model catalog. Running in text-only fallback.`
+      );
     } else if (!liveExists) {
-      warning = `Live voice model "${config.liveModel}" not found in catalog. Live voice is disabled and the app is operating in text-only fallback.`;
+      catalogWarnings.push(
+        `Live voice model "${config.liveModel}" not found in catalog. Live voice is disabled and the app is operating in text-only fallback.`
+      );
     } else if (!textExists) {
-      warning = `Text model "${config.textModel}" was not verified in model catalog.`;
+      catalogWarnings.push(`Text model "${config.textModel}" was not found in the model catalog.`);
     }
+
+    if (config.textModelFallback && !fallbackExists) {
+      catalogWarnings.push(
+        `Fallback text model "${config.textModelFallback}" was not found in the model catalog.`
+      );
+    }
+
+    baseCatalogWarning = catalogWarnings.length > 0 ? catalogWarnings.join(' ') : null;
 
     currentHealthStatus = {
       checkedAt: timestamp,
       liveModel: config.liveModel,
       textModel: config.textModel,
+      textModelFallback: config.textModelFallback || null,
       liveModelOk: liveExists,
       textModelOk: textExists,
+      textModelFallbackOk: fallbackExists,
       liveAvailable: liveExists,
       newerLiveModelSuggestion: suggestion,
-      warningMessage: warning,
+      warningMessage: composeWarningMessage(),
+      thinkingLevels: getThinkingLevelsConfig(),
       availableModels: modelNames,
     };
 
     return currentHealthStatus;
   } catch (err: any) {
-    console.error('Failed to run Gemini model health check:', err);
+    baseCatalogWarning = `Health check error: ${err?.message || 'Unable to list models'}. Defaulting to safe fallback.`;
     currentHealthStatus = {
       checkedAt: timestamp,
       liveModel: config.liveModel,
       textModel: config.textModel,
+      textModelFallback: config.textModelFallback || null,
       liveModelOk: false,
       textModelOk: false,
+      textModelFallbackOk: !config.textModelFallback,
       liveAvailable: false,
       newerLiveModelSuggestion: null,
-      warningMessage: `Health check error: ${err.message || 'Unable to list models'}. Defaulting to safe fallback.`,
+      warningMessage: composeWarningMessage(),
+      thinkingLevels: getThinkingLevelsConfig(),
       availableModels: [],
     };
     return currentHealthStatus;
@@ -120,136 +351,9 @@ export async function runModelHealthCheck(): Promise<ModelHealthStatus> {
 }
 
 /**
- * Function Declarations for Gemini Live and Text Fallback
- */
-export const toolDeclarations: FunctionDeclaration[] = [
-  {
-    name: 'request_screenshare',
-    description: 'Asks the user for permission to view their screen with a specific, plain one-line reason.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        reason: {
-          type: Type.STRING,
-          description: 'A brief, friendly one-line reason why seeing the screen is helpful right now.',
-        },
-      },
-      required: ['reason'],
-    },
-  },
-  {
-    name: 'stop_screenshare',
-    description: 'Signals that the agent has seen what it needed and screen sharing can now end.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {},
-    },
-  },
-  {
-    name: 'launch_app',
-    description: 'Launches a step-by-step guided app workflow for the user (e.g. safety-first-pass, first-task, weekly-review).',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        app_id: {
-          type: Type.STRING,
-          description: 'The identifier of the app to start: safety-first-pass, first-task, or weekly-review.',
-        },
-      },
-      required: ['app_id'],
-    },
-  },
-  {
-    name: 'update_routine_progress',
-    description: 'Updates the progress of an active guided routine checklist card in the UI as the user completes steps.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        app_id: {
-          type: Type.STRING,
-          description: 'The routine identifier (e.g. safety-first-pass, first-task, weekly-review).',
-        },
-        completed_step: {
-          type: Type.INTEGER,
-          description: 'The step number that was just completed (e.g. 1, 2, 3...).',
-        },
-        next_step: {
-          type: Type.INTEGER,
-          description: 'The next step number to focus on (e.g. 2, 3...), or null if the routine is fully completed.',
-        },
-      },
-      required: ['app_id', 'completed_step'],
-    },
-  },
-  {
-    name: 'propose_times',
-    description: 'Queries the owner calendar to return up to 3 available consultation slots within working hours.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        duration_minutes: {
-          type: Type.INTEGER,
-          description: 'Length of the meeting in minutes (default 30).',
-        },
-        user_timezone: {
-          type: Type.STRING,
-          description: 'The user timezone (e.g. America/New_York, Europe/London, America/Los_Angeles).',
-        },
-      },
-    },
-  },
-  {
-    name: 'get_booking_link',
-    description: 'Returns the direct scheduling link for confirmed bookings with Nic.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {},
-    },
-  },
-  {
-    name: 'escalate_to_owner',
-    description: 'Initiates a human handoff to Nic with a structured dossier of what was tried and what is blocking progress.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        summary: {
-          type: Type.STRING,
-          description: 'Clear, concise summary of the user goal, blocker, and reason for handoff.',
-        },
-      },
-      required: ['summary'],
-    },
-  },
-  {
-    name: 'save_session_note',
-    description: 'Saves a brief text note (max 500 characters) attached to the current user and product for subsequent continuity.',
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        text: {
-          type: Type.STRING,
-          description: 'Short factual note about preferences, decisions, or screen mismatches (max 500 characters).',
-        },
-      },
-      required: ['text'],
-    },
-  },
-];
-
-/**
- * Mints an ephemeral token for direct browser WebSocket connections
- */
-export async function mintEphemeralToken(): Promise<{
-  tokenName: string | null;
-  error?: string;
-  proxyAvailable: boolean;
-}> {
-  return { tokenName: null, proxyAvailable: true };
-}
-
-/**
- * Text Chat Fallback handling for gemini-3.8-flash
- * Supports multimodal screen frame analysis (when user shares screen in text mode).
+ * Text Chat handling using TEXT_MODEL (with thinkingFor("chat") = low).
+ * Supports multimodal screen frame analysis (when user shares screen in text mode),
+ * plus earlier session summary, active session notes, and current routine state.
  */
 export async function handleTextChat(payload: {
   userName: string;
@@ -258,22 +362,42 @@ export async function handleTextChat(payload: {
   messages: Array<{ role: string; text: string }>;
   userTimezone?: string;
   currentScreenFrame?: string | null;
+  routineState?: RoutineStatePayload | null;
+  progressSummary?: ProgressSummaryPayload | string | null;
+  sessionNotes?: string[];
 }): Promise<{
   reply: string;
   toolInvocations?: Array<{ name: string; args: any; result: any }>;
 }> {
-  const { userName, userEmail, product = 'muse', messages, userTimezone = 'America/New_York', currentScreenFrame } = payload;
-  const systemInstruction = buildSystemInstruction(userName, product);
+  const {
+    userName,
+    product = 'muse',
+    messages,
+    currentScreenFrame,
+    routineState = null,
+    progressSummary = null,
+    sessionNotes = [],
+  } = payload;
 
-  // Clean and prepare message turns:
-  // 1. Group consecutive messages of same role or collapse system notices into friendly context
-  // 2. Ensure alternating user/model sequence and that conversation starts with a user turn
+  const systemInstruction = buildSystemInstruction(userName, product, {
+    progressSummary,
+    sessionNotes,
+    routineState,
+  });
+
+  // Input caps: at most the last 60 messages, each truncated to 4,000 characters
+  const cappedMessages = (Array.isArray(messages) ? messages : [])
+    .slice(-60)
+    .map(m => ({
+      role: typeof m?.role === 'string' ? m.role : 'user',
+      text: typeof m?.text === 'string' ? m.text.slice(0, 4000) : '',
+    }));
+
   const cleanedTurns: Array<{ role: 'user' | 'model'; parts: any[] }> = [];
 
-  for (const m of messages) {
+  for (const m of cappedMessages) {
     if (!m.text || !m.text.trim()) continue;
 
-    // Convert system notices to conversational annotations on user side
     let turnRole: 'user' | 'model' = 'user';
     let textContent = m.text;
 
@@ -297,12 +421,10 @@ export async function handleTextChat(payload: {
     }
   }
 
-  // Gemini API requires first content turn to be role 'user'
   if (cleanedTurns.length > 0 && cleanedTurns[0].role === 'model') {
-    cleanedTurns.shift(); // Remove leading model turn (such as initial greeting)
+    cleanedTurns.shift();
   }
 
-  // If empty after cleaning, provide a default starting user turn
   if (cleanedTurns.length === 0) {
     cleanedTurns.push({
       role: 'user',
@@ -310,12 +432,16 @@ export async function handleTextChat(payload: {
     });
   }
 
-  // Multimodal Screen Analysis:
-  // If the user is currently sharing their screen, attach the latest JPEG frame to the final user turn
-  if (currentScreenFrame && currentScreenFrame.length > 100) {
+  // Multimodal Screen Analysis: attach latest JPEG frame (<= 2MB base64) to the final user turn
+  const MAX_SCREEN_FRAME_BASE64 = 2 * 1024 * 1024;
+  if (
+    currentScreenFrame &&
+    typeof currentScreenFrame === 'string' &&
+    currentScreenFrame.length > 100 &&
+    currentScreenFrame.length <= MAX_SCREEN_FRAME_BASE64
+  ) {
     const lastUserTurn = [...cleanedTurns].reverse().find(t => t.role === 'user');
     if (lastUserTurn) {
-      // Prepend or add the inlineData image part
       lastUserTurn.parts.unshift({
         inlineData: {
           mimeType: 'image/jpeg',
@@ -325,170 +451,465 @@ export async function handleTextChat(payload: {
     }
   }
 
-  let response: any;
-  let activeTextModel = config.textModel;
-  const candidateModels = Array.from(new Set(['gemini-3-flash-preview', config.textModel, 'gemini-3.5-flash', 'gemini-3.8-flash']));
+  const { response } = await generateTextWithRetryAndFallback({
+    task: 'chat',
+    contents: cleanedTurns,
+    config: {
+      systemInstruction,
+      temperature: 0.7,
+      tools: [{ functionDeclarations: toolDeclarations }],
+    },
+  });
 
-  try {
-    let lastError: any = null;
-    for (const modelToTry of candidateModels) {
-      try {
-        response = await ai.models.generateContent({
-          model: modelToTry,
-          contents: cleanedTurns,
-          config: {
-            systemInstruction,
-            temperature: 0.7,
-            tools: [{ functionDeclarations: toolDeclarations }],
-          },
-        });
-        activeTextModel = modelToTry;
-        lastError = null;
-        break;
-      } catch (err: any) {
-        lastError = err;
-        if (
-          err?.status === 429 ||
-          err?.status === 503 ||
-          err?.message?.includes('quota') ||
-          err?.message?.includes('RESOURCE_EXHAUSTED') ||
-          err?.message?.includes('high demand')
-        ) {
-          console.warn(`Model ${modelToTry} experienced rate limits or high demand, trying next candidate...`);
-          continue;
-        }
-        throw err;
-      }
-    }
+  const functionCalls = response.functionCalls;
+  const toolInvocations: Array<{ name: string; args: any; result: any }> = [];
 
-    if (!response && lastError) {
-      throw lastError;
-    }
+  let textReply = response.text || '';
 
-    const functionCalls = response.functionCalls;
-    const toolInvocations: Array<{ name: string; args: any; result: any }> = [];
-
-    let textReply = response.text || '';
-
-    // If model made function calls, execute them and provide a clean conversational followup
-    if (functionCalls && functionCalls.length > 0) {
-      for (const fc of functionCalls) {
-        let result: any = null;
-        if (fc.name === 'propose_times') {
-          const duration = (fc.args?.duration_minutes as number) || 30;
-          const tz = (fc.args?.user_timezone as string) || userTimezone;
-          result = await proposeTimes(duration, tz);
-        } else if (fc.name === 'get_booking_link') {
-          result = { bookingUrl: config.bookingUrl };
-        } else if (fc.name === 'escalate_to_owner') {
-          const summary = (fc.args?.summary as string) || 'User requested human assistance';
-          result = await logAndDispatchEscalation({
-            userName,
-            userEmail,
-            product,
-            goal: summary,
-            tried: 'Assisted via conversational guide',
-            screenSeen: currentScreenFrame ? 'Screen frame attached in session' : 'No screen capture recorded',
-            blocker: summary,
-            proposedTimes: [],
-            transcriptExcerpt: messages.slice(-20),
-          });
-        } else if (fc.name === 'launch_app') {
-          const appId = fc.args?.app_id as string;
-          const apps = getGuidedApps(product);
-          const matched = apps.find(a => a.id === appId);
-          result = matched || { id: appId, status: 'launched' };
-        } else if (fc.name === 'update_routine_progress') {
-          const appId = fc.args?.app_id as string;
-          const completedStep = Number(fc.args?.completed_step);
-          const nextStep = fc.args?.next_step !== undefined ? Number(fc.args?.next_step) : null;
-          result = { updated: true, app_id: appId, completed_step: completedStep, next_step: nextStep };
-        } else if (fc.name === 'save_session_note') {
-          result = { saved: true, text: fc.args?.text };
-        } else if (fc.name === 'request_screenshare') {
-          result = { requested: true, reason: fc.args?.reason };
-        } else if (fc.name === 'stop_screenshare') {
-          result = { stopped: true };
-        }
-
-        toolInvocations.push({
-          name: fc.name || 'tool',
-          args: fc.args,
-          result,
-        });
-      }
-
-      // If text response was empty because it only returned tool calls, generate a natural continuation
-      if (!textReply.trim()) {
-        const candidateContent = response.candidates?.[0]?.content;
-        if (candidateContent) {
-          try {
-            const continuationResponse = await ai.models.generateContent({
-              model: activeTextModel,
-              contents: [
-                ...cleanedTurns,
-                candidateContent,
-                {
-                  role: 'user',
-                  parts: toolInvocations.map(ti => ({
-                    functionResponse: {
-                      name: ti.name,
-                      response: { result: ti.result },
-                    },
-                  })),
-                },
-              ],
-              config: {
-                systemInstruction,
-              },
-            });
-            textReply = continuationResponse.text || '';
-          } catch (contErr) {
-            console.warn('Continuation generation after tool calls:', contErr);
-          }
-        }
-      }
+  if (functionCalls && functionCalls.length > 0) {
+    for (const fc of functionCalls) {
+      const toolName = fc.name || 'tool';
+      const result = executeServerTool(toolName, fc.args as Record<string, any>, product);
+      toolInvocations.push({
+        name: toolName,
+        args: fc.args,
+        result,
+      });
     }
 
     if (!textReply.trim()) {
-      const updateTool = toolInvocations.find(t => t.name === 'update_routine_progress');
-      const launchTool = toolInvocations.find(t => t.name === 'launch_app');
-
-      if (updateTool) {
-        const { app_id, completed_step, next_step } = updateTool.result || {};
-        const apps = getGuidedApps(product);
-        const app = apps.find(a => a.id === app_id);
-        if (next_step && app) {
-          const nextStepObj = app.steps.find(s => s.number === next_step);
-          const nextInquiry = nextStepObj?.coachPrompt || nextStepObj?.detail || '';
-          textReply = `Great, Step ${completed_step} is confirmed! Let's move to Step ${next_step}: ${nextStepObj?.title || ''}.\n\n${nextInquiry}`;
-        } else {
-          textReply = `All steps in this routine are now complete! I've noted down your safeguards so you are all set.`;
+      const candidateContent = response.candidates?.[0]?.content;
+      if (candidateContent) {
+        try {
+          const { response: continuationResponse } = await generateTextWithRetryAndFallback({
+            task: 'chat',
+            contents: [
+              ...cleanedTurns,
+              candidateContent,
+              {
+                role: 'user',
+                parts: toolInvocations.map(ti => ({
+                  functionResponse: {
+                    name: ti.name,
+                    response: { result: ti.result },
+                  },
+                })),
+              },
+            ],
+            config: {
+              systemInstruction,
+              tools: [{ functionDeclarations: toolDeclarations }],
+            },
+          });
+          textReply = continuationResponse.text || '';
+        } catch {
+          // Fall through to deterministic tool reply below
         }
-      } else if (launchTool) {
-        const appId = launchTool.args?.app_id;
-        const apps = getGuidedApps(product);
-        const app = apps.find(a => a.id === appId);
-        const step1 = app?.steps[0];
-        const step1Inquiry = step1?.coachPrompt || step1?.detail || '';
-        textReply = `I've opened the roadmap for ${app?.title || 'your routine'}. Let's take it one step at a time:\n\n${step1Inquiry}`;
-      } else if (toolInvocations.some(t => t.name === 'propose_times' || t.name === 'get_booking_link')) {
-        textReply = `I've checked Nic's live calendar. You can select one of the suggested times below or use his direct booking link.`;
-      } else if (toolInvocations.some(t => t.name === 'request_screenshare')) {
-        textReply = `Whenever you're ready, sharing your screen will let me see what's on display so we can walk through it together.`;
-      } else {
-        textReply = `I'm right here with you. What would you like to explore next?`;
       }
     }
-
-    return {
-      reply: textReply,
-      toolInvocations,
-    };
-  } catch (err: any) {
-    console.error('Error in handleTextChat:', err);
-    return {
-      reply: `I'm right here with you. Could you describe what you're seeing or what you'd like to do first?`,
-    };
   }
+
+  if (!textReply.trim()) {
+    const updateTool = toolInvocations.find(t => t.name === 'update_routine_progress');
+    const launchTool = toolInvocations.find(t => t.name === 'launch_app');
+    const escalateTool = toolInvocations.find(t => t.name === 'escalate_to_owner');
+    const noteSavedSucceeded = toolInvocations.some(
+      t => t.name === 'save_session_note' && t.result?.saved === true
+    );
+
+    if (escalateTool) {
+      textReply = `I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly.`;
+    } else if (updateTool) {
+      const { app_id, completed_step, next_step } = updateTool.result || {};
+      const apps = getGuidedApps(product);
+      const app = apps.find(a => a.id === app_id);
+      if (next_step && app) {
+        const nextStepObj = app.steps.find(s => s.number === next_step);
+        const nextInquiry = nextStepObj?.coachPrompt || nextStepObj?.detail || '';
+        textReply = `Great, Step ${completed_step} is confirmed! Let's move to Step ${next_step}: ${nextStepObj?.title || ''}.\n\n${nextInquiry}`;
+      } else if (noteSavedSucceeded) {
+        textReply = `All steps in this routine are now complete! I've saved your notes for this session.`;
+      } else {
+        textReply = `All steps in this routine are now complete!`;
+      }
+    } else if (launchTool) {
+      const appId = launchTool.args?.app_id;
+      const apps = getGuidedApps(product);
+      const app = apps.find(a => a.id === appId);
+      const step1 = app?.steps[0];
+      const step1Inquiry = step1?.coachPrompt || step1?.detail || '';
+      textReply = `I've opened the roadmap for ${app?.title || 'your routine'}. Let's take it one step at a time:\n\n${step1Inquiry}`;
+    } else if (toolInvocations.some(t => t.name === 'get_booking_link')) {
+      textReply = `Here is Nic's direct booking link below.`;
+    } else if (toolInvocations.some(t => t.name === 'request_screenshare')) {
+      textReply = `Whenever you're ready, sharing your screen will let me see what's on display so we can walk through it together.`;
+    } else if (toolInvocations.some(t => t.name === 'stop_screenshare')) {
+      textReply = `I've seen what I needed and stopped screen sharing for you.`;
+    } else if (noteSavedSucceeded) {
+      textReply = `I've saved that note to your session.`;
+    } else if (toolInvocations.length === 0) {
+      throw new Error('Model returned an empty response.');
+    }
+  }
+
+  return {
+    reply: textReply,
+    toolInvocations,
+  };
+}
+
+export interface SummarizeResponse {
+  done: string[];
+  inProgress: string[];
+  boundariesAndPreferences: string[];
+  openQuestions: string[];
+  suggestedNextStep: string;
+  summary: string;
+}
+
+function buildLocalFallbackSummary(
+  product: string,
+  productName: string,
+  rawTranscript: Array<{ role: string; text: string }>,
+  routineState?: RoutineStatePayload | null,
+  previousSummary?: ProgressSummaryPayload | string | null
+): SummarizeResponse {
+  const prevObj: ProgressSummaryPayload =
+    previousSummary && typeof previousSummary === 'object' ? previousSummary : {};
+
+  const done = Array.isArray(prevObj.done) ? [...prevObj.done] : [];
+  const inProgress = Array.isArray(prevObj.inProgress) ? [...prevObj.inProgress] : [];
+  const boundariesAndPreferences = Array.isArray(prevObj.boundariesAndPreferences)
+    ? [...prevObj.boundariesAndPreferences]
+    : [];
+  const openQuestions = Array.isArray(prevObj.openQuestions) ? [...prevObj.openQuestions] : [];
+  let suggestedNextStep =
+    prevObj.suggestedNextStep || `Continue exploring ${productName} at your own pace.`;
+
+  if (routineState?.activeRoutineId) {
+    const apps = getGuidedApps(product);
+    const app = apps.find(a => a.id === routineState.activeRoutineId);
+    const routineTitle = app?.title || routineState.activeRoutineId;
+    const completedCount = routineState.completedSteps?.length || 0;
+    const totalCount = app?.steps?.length || 0;
+
+    if (totalCount > 0 && completedCount >= totalCount) {
+      const doneEntry = `Completed the "${routineTitle}" routine`;
+      if (!done.includes(doneEntry)) done.push(doneEntry);
+      suggestedNextStep = `Choose your next workflow or review your settings in ${productName}.`;
+    } else if (routineState.activeStep) {
+      const stepObj = app?.steps?.find(s => s.number === routineState.activeStep);
+      const progEntry = `${routineTitle} (Step ${routineState.activeStep}${
+        stepObj ? `: ${stepObj.title}` : ''
+      })`;
+      if (!inProgress.includes(progEntry)) inProgress.unshift(progEntry);
+      suggestedNextStep = `Continue with Step ${routineState.activeStep} of "${routineTitle}".`;
+    }
+  }
+
+  const userTurns = rawTranscript.filter(m => m.role === 'user' && m.text?.trim());
+  const lastUserTurn =
+    userTurns.length > 0 ? userTurns[userTurns.length - 1].text.trim().slice(0, 200) : '';
+
+  let summaryText = '';
+  if (done.length > 0 && inProgress.length > 0) {
+    summaryText = `You completed ${done[done.length - 1]} and are currently working on ${inProgress[0]}.`;
+  } else if (done.length > 0) {
+    summaryText = `You completed ${done[done.length - 1]} in ${productName}.`;
+  } else if (inProgress.length > 0) {
+    summaryText = `You are currently working on ${inProgress[0]} in ${productName}.`;
+  } else if (lastUserTurn) {
+    summaryText = `You were discussing ${productName} ("${lastUserTurn}"). Next time, we can pick up right where you left off.`;
+  } else if (typeof previousSummary === 'object' && previousSummary?.summary) {
+    summaryText = previousSummary.summary;
+  } else if (typeof previousSummary === 'string' && previousSummary.trim()) {
+    summaryText = previousSummary.trim();
+  } else {
+    summaryText = `You started exploring ${productName}. Whenever you are ready, we can pick up right where we left off.`;
+  }
+
+  return {
+    done: done.slice(0, 10),
+    inProgress: inProgress.slice(0, 10),
+    boundariesAndPreferences: boundariesAndPreferences.slice(0, 10),
+    openQuestions: openQuestions.slice(0, 10),
+    suggestedNextStep: suggestedNextStep.slice(0, 400),
+    summary: summaryText.slice(0, 1200),
+  };
+}
+
+/**
+ * Generates a structured progress summary using TEXT_MODEL, thinkingFor("summary") = high,
+ * and a JSON responseSchema.
+ * Only includes things the user actually said or confirmed.
+ * Never includes passwords, codes, card numbers, or anything seen on screen that looks sensitive.
+ */
+export async function handleSummarize(payload: {
+  userName: string;
+  product: string;
+  transcript?: Array<{ role: string; text: string }>;
+  messages?: Array<{ role: string; text: string }>;
+  routineState?: RoutineStatePayload | null;
+  previousSummary?: ProgressSummaryPayload | string | null;
+}): Promise<SummarizeResponse> {
+  const {
+    userName,
+    product = 'muse',
+    transcript,
+    messages,
+    routineState = null,
+    previousSummary = null,
+  } = payload;
+
+  const productObj = getProductById(product);
+  const productName = productObj?.name || product;
+
+  const rawTranscript = Array.isArray(transcript)
+    ? transcript
+    : Array.isArray(messages)
+    ? messages
+    : [];
+
+  // Last 80 messages, text only
+  const formattedTranscript = rawTranscript
+    .slice(-80)
+    .filter(m => m && typeof m.text === 'string' && m.text.trim())
+    .map(m => {
+      const label =
+        m.role === 'user' ? 'User' : m.role === 'guide' || m.role === 'model' ? 'Guide' : 'System';
+      return `${label}: ${m.text.trim().slice(0, 4000)}`;
+    })
+    .join('\n');
+
+  const fallbackResult = buildLocalFallbackSummary(
+    product,
+    productName,
+    rawTranscript,
+    routineState,
+    previousSummary
+  );
+
+  if (!formattedTranscript.trim() && !previousSummary) {
+    return fallbackResult;
+  }
+
+  const prevSummaryStr =
+    typeof previousSummary === 'string'
+      ? previousSummary
+      : previousSummary && typeof previousSummary === 'object'
+      ? JSON.stringify(previousSummary)
+      : 'None';
+
+  const routineStateStr = routineState ? JSON.stringify(routineState) : 'None';
+
+  const prompt = `You are writing a calm, plain-language progress summary for ${userName} on product "${productName}".
+
+STRICT PRIVACY & ACCURACY RULES:
+1. Only include things the user actually said or confirmed in the conversation or routine progress. Do NOT invent or assume steps they did not confirm.
+2. NEVER include passwords, one-time codes, API keys, card numbers, government IDs, private URLs/tokens, or anything seen on screen that looks sensitive.
+3. Write "summary" directly to the user in second person ("you"), in a warm, plain, unhurried tone, and strictly <= 1,200 characters.
+
+Previous Progress Summary:
+${prevSummaryStr}
+
+Current Routine State:
+${routineStateStr}
+
+Recent Conversation Transcript (last 80 messages):
+${formattedTranscript || '(No new messages)'}`;
+
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      done: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Steps, checks, or tasks the user actually completed or confirmed.',
+      },
+      inProgress: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Routines, steps, or topics currently in progress.',
+      },
+      boundariesAndPreferences: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Safety boundaries, permissions, or preferences the user stated or chose.',
+      },
+      openQuestions: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: 'Unresolved questions or things the user wanted to check later.',
+      },
+      suggestedNextStep: {
+        type: Type.STRING,
+        description: 'One clear, calm suggested next step for their next visit.',
+      },
+      summary: {
+        type: Type.STRING,
+        description: 'Plain and warm summary (<= 1,200 characters) written directly to the user as "you".',
+      },
+    },
+    required: [
+      'done',
+      'inProgress',
+      'boundariesAndPreferences',
+      'openQuestions',
+      'suggestedNextStep',
+      'summary',
+    ],
+  };
+
+  try {
+    const { response } = await generateTextWithRetryAndFallback({
+      task: 'summary',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema,
+        temperature: 0.3,
+      },
+    });
+
+    const rawText = (response.text || '').trim();
+    if (rawText) {
+      const parsed = JSON.parse(rawText);
+      return {
+        done: Array.isArray(parsed.done) ? parsed.done.map((s: any) => String(s)) : fallbackResult.done,
+        inProgress: Array.isArray(parsed.inProgress)
+          ? parsed.inProgress.map((s: any) => String(s))
+          : fallbackResult.inProgress,
+        boundariesAndPreferences: Array.isArray(parsed.boundariesAndPreferences)
+          ? parsed.boundariesAndPreferences.map((s: any) => String(s))
+          : fallbackResult.boundariesAndPreferences,
+        openQuestions: Array.isArray(parsed.openQuestions)
+          ? parsed.openQuestions.map((s: any) => String(s))
+          : fallbackResult.openQuestions,
+        suggestedNextStep:
+          typeof parsed.suggestedNextStep === 'string' && parsed.suggestedNextStep.trim()
+            ? parsed.suggestedNextStep.slice(0, 400)
+            : fallbackResult.suggestedNextStep,
+        summary:
+          typeof parsed.summary === 'string' && parsed.summary.trim()
+            ? parsed.summary.trim().slice(0, 1200)
+            : fallbackResult.summary,
+      };
+    }
+  } catch {
+    // Gracefully return deterministic local summary when models are unavailable
+  }
+
+  return fallbackResult;
+}
+
+export interface ReportDraftResponse {
+  goal: string;
+  tried: string;
+  blocker: string;
+}
+
+/**
+ * Generates a pre-fill draft for the "Report for Nic" card when the user opens it manually.
+ * Uses thinkingFor("reportDraft") = high and a JSON responseSchema { goal, tried, blocker },
+ * each a few plain sentences, written only from what the user said or confirmed, with nothing sensitive.
+ */
+export async function handleReportDraft(payload: {
+  userName: string;
+  product: string;
+  transcript?: Array<{ role: string; text: string }>;
+  progressSummary?: ProgressSummaryPayload | string | null;
+  routineState?: RoutineStatePayload | null;
+}): Promise<ReportDraftResponse> {
+  const {
+    userName,
+    product = 'muse',
+    transcript,
+    progressSummary = null,
+    routineState = null,
+  } = payload;
+
+  const productObj = getProductById(product);
+  const productName = productObj?.name || product;
+
+  const rawTranscript = Array.isArray(transcript) ? transcript : [];
+
+  // Last 40 messages, text only
+  const formattedTranscript = rawTranscript
+    .slice(-40)
+    .filter(m => m && typeof m.text === 'string' && m.text.trim())
+    .map(m => {
+      const label =
+        m.role === 'user' ? 'User' : m.role === 'guide' || m.role === 'model' ? 'Guide' : 'System';
+      return `${label}: ${m.text.trim().slice(0, 4000)}`;
+    })
+    .join('\n');
+
+  const progressSummaryStr =
+    typeof progressSummary === 'string'
+      ? progressSummary
+      : progressSummary && typeof progressSummary === 'object'
+      ? JSON.stringify(progressSummary)
+      : 'None';
+
+  const routineStateStr = routineState ? JSON.stringify(routineState) : 'None';
+
+  const prompt = `You are drafting a short, plain-language handoff note for Nic (the human specialist) on behalf of ${userName} regarding "${productName}".
+
+STRICT PRIVACY & ACCURACY RULES:
+1. Only include things the user actually said or confirmed in the conversation, progress summary, or routine state. Do NOT invent steps or assumptions.
+2. NEVER include passwords, one-time codes, API keys, card numbers, government IDs, private URLs/tokens, or anything sensitive.
+3. Write each field ("goal", "tried", "blocker") as a few plain, clear sentences that the user can easily review and edit before sending.
+
+Progress Summary:
+${progressSummaryStr}
+
+Current Routine State:
+${routineStateStr}
+
+Recent Conversation Transcript (last 40 messages):
+${formattedTranscript || '(No recent messages)'}`;
+
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      goal: {
+        type: Type.STRING,
+        description:
+          'A few plain sentences describing what the user is trying to accomplish, based only on what they said or confirmed.',
+      },
+      tried: {
+        type: Type.STRING,
+        description:
+          'A few plain sentences describing what steps, routines, or settings have already been tried or confirmed.',
+      },
+      blocker: {
+        type: Type.STRING,
+        description:
+          'A few plain sentences describing what is blocking progress or what question they want Nic to review.',
+      },
+    },
+    required: ['goal', 'tried', 'blocker'],
+  };
+
+  const { response } = await generateTextWithRetryAndFallback({
+    task: 'reportDraft',
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema,
+      temperature: 0.3,
+    },
+  });
+
+  const rawText = (response.text || '').trim();
+  if (!rawText) {
+    throw new Error('Empty report draft response');
+  }
+
+  const parsed = JSON.parse(rawText);
+  return {
+    goal: typeof parsed.goal === 'string' ? parsed.goal.trim().slice(0, 1000) : '',
+    tried: typeof parsed.tried === 'string' ? parsed.tried.trim().slice(0, 1000) : '',
+    blocker: typeof parsed.blocker === 'string' ? parsed.blocker.trim().slice(0, 1000) : '',
+  };
 }

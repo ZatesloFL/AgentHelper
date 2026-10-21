@@ -1,17 +1,16 @@
 /**
- * Screen share capture and frame downscaling utility
+ * Screen share capture, 1 FPS local preview, and 32x18 grayscale change detection
  * - Enforces max width 1280px
  * - JPEG quality 0.7
- * - Maximum 1 frame per second (1 FPS)
+ * - Captures locally at 1 FPS for the UI preview
+ * - Computes a 32x18 grayscale thumbnail for voice-mode visual change detection
  * - Feature detects navigator.mediaDevices.getDisplayMedia
  * - Never stores frames to disk
  */
 
-export interface ScreenCaptureController {
-  start: () => Promise<MediaStream>;
-  stop: () => void;
-  isActive: () => boolean;
-}
+export const THUMB_WIDTH = 32;
+export const THUMB_HEIGHT = 18;
+export const DEFAULT_PIXEL_DIFF_THRESHOLD = 4.5; // Average grayscale pixel difference (0-255 scale)
 
 export function isScreenShareSupported(): boolean {
   return (
@@ -21,17 +20,62 @@ export function isScreenShareSupported(): boolean {
   );
 }
 
+/**
+ * Computes a 32x18 grayscale thumbnail (Uint8Array of 576 luminance values) from a CanvasImageSource.
+ */
+export function extractGrayscaleThumbnail(
+  source: CanvasImageSource,
+  thumbCanvas?: HTMLCanvasElement
+): Uint8Array {
+  const canvas = thumbCanvas || document.createElement('canvas');
+  canvas.width = THUMB_WIDTH;
+  canvas.height = THUMB_HEIGHT;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const gray = new Uint8Array(THUMB_WIDTH * THUMB_HEIGHT);
+  if (!ctx) return gray;
+
+  ctx.drawImage(source, 0, 0, THUMB_WIDTH, THUMB_HEIGHT);
+  const rgba = ctx.getImageData(0, 0, THUMB_WIDTH, THUMB_HEIGHT).data;
+  for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
+    // Standard BT.601 luma
+    gray[i] = Math.round(0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2]);
+  }
+  return gray;
+}
+
+/**
+ * Compares two 32x18 grayscale thumbnails and returns true if the average pixel difference
+ * exceeds `threshold`.
+ */
+export function hasScreenVisiblyChanged(
+  currentThumb: Uint8Array | null,
+  lastSentThumb: Uint8Array | null,
+  threshold: number = DEFAULT_PIXEL_DIFF_THRESHOLD
+): boolean {
+  if (!currentThumb) return false;
+  if (!lastSentThumb || currentThumb.length !== lastSentThumb.length) return true;
+
+  let totalDiff = 0;
+  for (let i = 0; i < currentThumb.length; i++) {
+    totalDiff += Math.abs(currentThumb[i] - lastSentThumb[i]);
+  }
+  const avgDiff = totalDiff / currentThumb.length;
+  return avgDiff > threshold;
+}
+
 export class ScreenStreamer {
   private stream: MediaStream | null = null;
   private videoElement: HTMLVideoElement | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
+  private thumbCanvasElement: HTMLCanvasElement | null = null;
   private intervalId: any = null;
   private latestFrame: string | null = null;
-  private onFrameCallback: ((jpegBase64: string) => void) | null = null;
+  private latestThumbnail: Uint8Array | null = null;
+  private onFrameCallback: ((jpegBase64: string, thumbnail: Uint8Array) => void) | null = null;
   private onStopCallback: (() => void) | null = null;
 
   constructor(
-    onFrame: (jpegBase64: string) => void,
+    onFrame: (jpegBase64: string, thumbnail: Uint8Array) => void,
     onStop?: () => void
   ) {
     this.onFrameCallback = onFrame;
@@ -42,13 +86,17 @@ export class ScreenStreamer {
     return this.latestFrame;
   }
 
+  public getLatestThumbnail(): Uint8Array | null {
+    return this.latestThumbnail;
+  }
+
   public async startCapture(): Promise<boolean> {
     if (!isScreenShareSupported()) {
       throw new Error('Screen sharing is not supported in this browser.');
     }
 
     try {
-      this.stream = await navigator.mediaDevices.getDisplayMedia({
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           frameRate: { max: 1 },
           width: { max: 1280 },
@@ -56,8 +104,16 @@ export class ScreenStreamer {
         audio: false,
       });
 
+      const videoTrack = displayStream.getVideoTracks()[0];
+      if (!videoTrack || videoTrack.readyState === 'ended') {
+        displayStream.getTracks().forEach(t => t.stop());
+        return false;
+      }
+
+      this.stream = displayStream;
+
       // Handle user stopping screen share via native browser UI bar
-      this.stream.getVideoTracks()[0].onended = () => {
+      videoTrack.onended = () => {
         this.stopCapture();
       };
 
@@ -70,19 +126,25 @@ export class ScreenStreamer {
       await this.videoElement.play();
 
       this.canvasElement = document.createElement('canvas');
+      this.thumbCanvasElement = document.createElement('canvas');
 
-      // Start 1 FPS capture loop (1000ms interval)
+      // Start 1 FPS local capture loop (1000ms interval)
       this.intervalId = setInterval(() => {
         this.captureFrame();
       }, 1000);
 
-      // Immediate first frame
-      setTimeout(() => this.captureFrame(), 300);
+      // Immediate first frame once video dimensions are available
+      setTimeout(() => this.captureFrame(), 250);
 
       return true;
     } catch (err) {
-      this.stopCapture();
-      throw err;
+      // Do not trigger onStopCallback if capture never started (e.g. user cancelled picker)
+      const hadStream = this.stream !== null;
+      this.cleanupResources();
+      if (hadStream && this.onStopCallback) {
+        this.onStopCallback();
+      }
+      return false;
     }
   }
 
@@ -116,14 +178,19 @@ export class ScreenStreamer {
     const base64Data = dataUrl.split(',')[1];
 
     if (base64Data) {
+      const thumbnail = extractGrayscaleThumbnail(
+        this.canvasElement,
+        this.thumbCanvasElement || undefined
+      );
       this.latestFrame = base64Data;
+      this.latestThumbnail = thumbnail;
       if (this.onFrameCallback) {
-        this.onFrameCallback(base64Data);
+        this.onFrameCallback(base64Data, thumbnail);
       }
     }
   }
 
-  public stopCapture() {
+  private cleanupResources() {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
@@ -141,8 +208,13 @@ export class ScreenStreamer {
     }
 
     this.canvasElement = null;
+    this.thumbCanvasElement = null;
+  }
 
-    if (this.onStopCallback) {
+  public stopCapture() {
+    const wasSharing = this.stream !== null;
+    this.cleanupResources();
+    if (wasSharing && this.onStopCallback) {
       this.onStopCallback();
     }
   }

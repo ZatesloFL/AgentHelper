@@ -1,0 +1,142 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User consent and profile metadata",
+      "type": "object",
+      "properties": {
+        "consentAccepted": {
+          "type": "boolean",
+          "description": "Whether the user accepted the current consent modal"
+        },
+        "consentVersion": {
+          "type": "number",
+          "description": "Version number of the accepted consent"
+        },
+        "consentAcceptedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when consent was accepted"
+        }
+      },
+      "required": ["consentAccepted", "consentVersion"]
+    },
+    "SessionNote": {
+      "title": "SessionNote",
+      "description": "Short factual note saved for a user and product",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Owner UID"
+        },
+        "product": {
+          "type": "string",
+          "description": "Product identifier"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Note content"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["userId", "product", "text"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Saved text-only conversation transcript and routine cards",
+      "type": "object",
+      "properties": {
+        "product": {
+          "type": "string",
+          "description": "Product ID for the conversation"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the conversation started"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the conversation was last updated"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1200,
+          "description": "Optional summary of the conversation"
+        },
+        "messages": {
+          "type": "array",
+          "description": "Up to 400 text-only messages in the conversation"
+        }
+      },
+      "required": ["product", "startedAt", "updatedAt", "messages"]
+    },
+    "ProgressSummary": {
+      "title": "ProgressSummary",
+      "description": "Structured progress summary written by the agent for a user and product",
+      "type": "object",
+      "properties": {
+        "product": {
+          "type": "string",
+          "description": "Product ID"
+        },
+        "done": {
+          "type": "array",
+          "description": "Completed items confirmed by the user"
+        },
+        "inProgress": {
+          "type": "array",
+          "description": "Items currently in progress"
+        },
+        "boundariesAndPreferences": {
+          "type": "array",
+          "description": "User boundaries and safety preferences"
+        },
+        "openQuestions": {
+          "type": "array",
+          "description": "Open questions remaining"
+        },
+        "suggestedNextStep": {
+          "type": "string",
+          "description": "Suggested next step for the next visit"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1200,
+          "description": "Plain, warm summary written to the user as 'you' (<= 1,200 chars)"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the progress summary was last updated"
+        }
+      },
+      "required": ["product", "summary", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Root user document storing consent state"
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/SessionNote" },
+      "description": "Per-user session notes"
+    },
+    "/users/{userId}/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Per-user saved conversations (max 400 text-only messages)"
+    },
+    "/users/{userId}/progress/{product}": {
+      "schema": { "$ref": "#/entities/ProgressSummary" },
+      "description": "Per-user per-product progress summary"
+    }
+  }
+}

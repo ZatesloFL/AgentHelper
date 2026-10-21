@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 
 interface ConsentModalProps {
   isOpen: boolean;
@@ -40,6 +40,13 @@ export const ConsentModal: React.FC<ConsentModalProps> = ({ isOpen, onAccept }) 
           </div>
 
           <div className="flex items-start gap-3">
+            <span className="text-base text-[#14532D] font-bold">·</span>
+            <p>
+              Your voice, messages, and any screen you share are processed by Google's Gemini AI to answer you. Under our paid plan, Google does not use them to train its models.
+            </p>
+          </div>
+
+          <div className="flex items-start gap-3">
             <span className="text-base text-[#9A3412] font-bold">·</span>
             <p>
               <strong className="font-semibold text-[#1C1917]">I never need your passwords, API keys, or card numbers.</strong> If you see one on screen, do not read it out loud. Close that tab before sharing.
@@ -56,14 +63,14 @@ export const ConsentModal: React.FC<ConsentModalProps> = ({ isOpen, onAccept }) 
           <div className="flex items-start gap-3">
             <span className="text-base text-[#14532D] font-bold">·</span>
             <p>
-              <strong className="font-semibold text-[#1C1917]">I do not save video or audio.</strong> I save short text notes so I can help next time, and you can delete them anytime.
+              <strong className="font-semibold text-[#1C1917]">I do not save video or audio.</strong> I save text notes, a short summary of your progress, and our chat history to your account so I can pick up where we left off. You can view or delete them anytime.
             </p>
           </div>
         </div>
 
         <div className="pt-1 flex items-center justify-between">
           <p className="text-xs text-[#78716C]">
-            Accepted once per account.
+            Accepted once per account (Version 2).
           </p>
           <button
             onClick={onAccept}
@@ -77,3 +84,4 @@ export const ConsentModal: React.FC<ConsentModalProps> = ({ isOpen, onAccept }) 
     </div>
   );
 };
+

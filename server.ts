@@ -7,110 +7,62 @@ import { config } from './server/config.js';
 import {
   runModelHealthCheck,
   currentHealthStatus,
-  mintEphemeralToken,
   handleTextChat,
+  handleSummarize,
+  handleReportDraft,
+  getThinkingLevelsConfig,
 } from './server/models.js';
 import {
-  getAvailableProducts,
+  getAllRegisteredProducts,
   getKnowledge,
   getGuidedApps,
 } from './server/knowledge.js';
-import { proposeTimes } from './server/calendar.js';
-import { logAndDispatchEscalation, getEscalations } from './server/escalations.js';
+import { getEnabledProducts, isKnownProduct } from './server/products.js';
+import { requireUser, requireAdmin } from './server/auth.js';
+import {
+  rateLimitChat,
+  rateLimitReport,
+  rateLimitSummarize,
+  rateLimitReportDraft,
+} from './server/rate-limit.js';
+import { dispatchHandoffReport } from './server/escalations.js';
 import { setupLiveWebSocket } from './server/live-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const MAX_SCREEN_FRAME_BASE64 = 2 * 1024 * 1024; // 2 MB base64
+
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
 
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '4mb' }));
 
   // Run initial model health check
   runModelHealthCheck().catch(err => console.error('Initial health check failed:', err));
 
-  // --- API Routes ---
+  // --- Public API Routes (no auth required) ---
 
   // Health & Model Status
-  app.get('/api/health', (req, res) => {
-    res.json(currentHealthStatus);
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      ...currentHealthStatus,
+      bookingUrl: config.bookingUrl,
+      sheetWebhookConfigured: Boolean(config.sheetWebhookUrl),
+    });
   });
 
-  // Ephemeral Token Minting
-  app.post('/api/session/token', async (req, res) => {
-    try {
-      const tokenResult = await mintEphemeralToken();
-      res.json({
-        token: tokenResult.tokenName,
-        proxyAvailable: tokenResult.proxyAvailable,
-        model: config.liveModel,
-        deepModel: config.liveModelDeep,
-        textModel: config.textModel,
-        liveAvailable: currentHealthStatus.liveAvailable,
-        warningMessage: currentHealthStatus.warningMessage,
-        ownerName: config.ownerName,
-        bookingUrl: config.bookingUrl,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Token generation failed' });
-    }
-  });
-
-  // Text Chat Fallback
-  app.post('/api/chat', async (req, res) => {
-    try {
-      const { userName, userEmail, product, messages, userTimezone, currentScreenFrame } = req.body;
-      const result = await handleTextChat({
-        userName: userName || 'Friend',
-        userEmail: userEmail || '',
-        product: product || 'muse',
-        messages: messages || [],
-        userTimezone: userTimezone || 'America/New_York',
-        currentScreenFrame: currentScreenFrame || null,
-      });
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Text generation failed' });
-    }
-  });
-
-  // Calendar Slots Proposal (Server-Side Only)
-  app.get('/api/calendar/slots', async (req, res) => {
-    try {
-      const duration = parseInt(req.query.duration as string || '30', 10);
-      const tz = (req.query.timezone as string) || config.ownerTimezone;
-      const slots = await proposeTimes(duration, tz);
-      res.json({
-        slots,
-        ownerTimezone: config.ownerTimezone,
-        workingHours: config.workingHours,
-        bookingUrl: config.bookingUrl,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Calendar check failed' });
-    }
-  });
-
-  // Human Escalation
-  app.post('/api/escalate', async (req, res) => {
-    try {
-      const result = await logAndDispatchEscalation(req.body);
-      res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Escalation logging failed' });
-    }
-  });
-
-  // Products
-  app.get('/api/products', (req, res) => {
-    const products = getAvailableProducts();
-    const detailed = products.map(p => {
-      const k = getKnowledge(p);
+  // Products (returns only enabled products from registry, using `name` as display label)
+  app.get('/api/products', (_req, res) => {
+    const enabled = getEnabledProducts();
+    const detailed = enabled.map(p => {
+      const k = getKnowledge(p.id);
       return {
-        id: p,
-        title: k.title,
+        id: p.id,
+        name: p.name,
+        title: p.name,
+        enabled: p.enabled,
         lastChecked: k.lastChecked,
         isStale: k.isStale,
       };
@@ -118,59 +70,235 @@ async function startServer() {
     res.json(detailed);
   });
 
-  // Knowledge details
-  app.get('/api/knowledge/:product', (req, res) => {
-    const p = req.params.product || 'muse';
+  // --- Authenticated API Routes (requireUser applied to every other /api route) ---
+  app.use('/api', requireUser);
+
+  // Text Chat Fallback (20 req/min per uid, validated product & input caps)
+  app.post('/api/chat', requireUser, rateLimitChat, async (req, res) => {
+    try {
+      const {
+        product = 'muse',
+        messages,
+        userTimezone,
+        currentScreenFrame,
+        routineState,
+        progressSummary,
+        sessionNotes,
+      } = req.body || {};
+
+      if (!isKnownProduct(product)) {
+        return res.status(400).json({ error: `Unknown product "${product}".` });
+      }
+
+      if (
+        currentScreenFrame &&
+        typeof currentScreenFrame === 'string' &&
+        currentScreenFrame.length > MAX_SCREEN_FRAME_BASE64
+      ) {
+        return res.status(400).json({
+          error: 'The shared screen image is larger than the 2 MB limit. Please try sharing a smaller window.',
+        });
+      }
+
+      const rawMessages = Array.isArray(messages) ? messages : [];
+      const cappedMessages = rawMessages.slice(-60).map((m: any) => ({
+        role: typeof m?.role === 'string' ? m.role : 'user',
+        text: typeof m?.text === 'string' ? m.text.slice(0, 4000) : '',
+      }));
+
+      const normalizedRoutineState =
+        routineState && typeof routineState === 'object'
+          ? {
+              activeRoutineId:
+                typeof routineState.activeRoutineId === 'string' ? routineState.activeRoutineId : null,
+              completedSteps: Array.isArray(routineState.completedSteps)
+                ? routineState.completedSteps.map((n: any) => Number(n))
+                : [],
+              activeStep: typeof routineState.activeStep === 'number' ? routineState.activeStep : null,
+            }
+          : null;
+
+      // User's name and email ALWAYS come from the verified token
+      const result = await handleTextChat({
+        userName: req.user!.name,
+        userEmail: req.user!.email,
+        product,
+        messages: cappedMessages,
+        userTimezone: userTimezone || 'America/New_York',
+        currentScreenFrame: currentScreenFrame || null,
+        routineState: normalizedRoutineState,
+        progressSummary: progressSummary || null,
+        sessionNotes: Array.isArray(sessionNotes)
+          ? sessionNotes.filter((n: any) => typeof n === 'string').slice(0, 20)
+          : [],
+      });
+      res.json(result);
+    } catch (err: any) {
+      console.error('Chat generation failed:', err?.message || err);
+      res.status(503).json({
+        error: "I couldn't reach the guide just now. Your message is saved.",
+        message: "I couldn't reach the guide just now. Your message is saved.",
+      });
+    }
+  });
+
+  // Session Progress Summarize (20 req/hour per uid)
+  // Body: { product, transcript (last 80 messages), routineState, previousSummary }
+  app.post('/api/summarize', requireUser, rateLimitSummarize, async (req, res) => {
+    try {
+      const {
+        product = 'muse',
+        transcript,
+        messages,
+        routineState,
+        previousSummary,
+      } = req.body || {};
+
+      if (!isKnownProduct(product)) {
+        return res.status(400).json({ error: `Unknown product "${product}".` });
+      }
+
+      const rawTranscript = Array.isArray(transcript)
+        ? transcript
+        : Array.isArray(messages)
+        ? messages
+        : [];
+
+      const result = await handleSummarize({
+        userName: req.user!.name,
+        product,
+        transcript: rawTranscript.slice(-80),
+        routineState: routineState || null,
+        previousSummary: previousSummary || null,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Summary generation failed' });
+    }
+  });
+
+  // Report Pre-fill with High Thinking (10 req/hour per uid)
+  // Body: { product, transcript (last 40 messages), progressSummary, routineState }
+  app.post('/api/report/draft', requireUser, rateLimitReportDraft, async (req, res) => {
+    try {
+      const {
+        product = 'muse',
+        transcript,
+        progressSummary,
+        routineState,
+      } = req.body || {};
+
+      if (!isKnownProduct(product)) {
+        return res.status(400).json({ error: `Unknown product "${product}".` });
+      }
+
+      const rawTranscript = Array.isArray(transcript) ? transcript : [];
+
+      const result = await handleReportDraft({
+        userName: req.user!.name,
+        product,
+        transcript: rawTranscript.slice(-40),
+        progressSummary: progressSummary || null,
+        routineState: routineState || null,
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(503).json({ error: err?.message || 'Report draft generation failed' });
+    }
+  });
+
+  // Handoff Report to Google Sheet (5 per day per uid; userName & userEmail always from verified token)
+  const handleReportHandler = async (req: express.Request, res: express.Response) => {
+    try {
+      const body = req.body || {};
+      const product = body.product || 'muse';
+      if (!isKnownProduct(product)) {
+        return res.status(400).json({ error: `Unknown product "${product}".` });
+      }
+
+      const includeTranscript = body.includeTranscript !== false;
+      const result = await dispatchHandoffReport({
+        userName: req.user!.name,
+        userEmail: req.user!.email,
+        product,
+        goal: typeof body.goal === 'string' ? body.goal : '',
+        tried: typeof body.tried === 'string' ? body.tried : '',
+        blocker: typeof body.blocker === 'string' ? body.blocker : '',
+        includeTranscript,
+        transcript: body.transcript,
+        routineProgress: typeof body.routineProgress === 'string' ? body.routineProgress : '',
+        progressSummary: typeof body.progressSummary === 'string' ? body.progressSummary : '',
+      });
+
+      if (!result.ok) {
+        return res.status(502).json({
+          ok: false,
+          error: "I couldn't send that just now. Nothing was lost — you can try again, or open Nic's booking page.",
+          bookingUrl: config.bookingUrl,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        id: result.id,
+        bookingUrl: config.bookingUrl,
+      });
+    } catch (err: any) {
+      return res.status(502).json({
+        ok: false,
+        error: "I couldn't send that just now. Nothing was lost — you can try again, or open Nic's booking page.",
+        bookingUrl: config.bookingUrl,
+      });
+    }
+  };
+
+  app.post('/api/report', requireUser, rateLimitReport, handleReportHandler);
+  app.post('/api/escalate', requireUser, rateLimitReport, handleReportHandler);
+
+  // Knowledge details (validated against product registry)
+  app.get('/api/knowledge/:product', requireUser, (req, res) => {
+    const p = req.params.product;
+    if (!isKnownProduct(p)) {
+      return res.status(400).json({ error: `Unknown product "${p}".` });
+    }
     const knowledge = getKnowledge(p);
     res.json(knowledge);
   });
 
-  // Guided apps
-  app.get('/api/apps/:product', (req, res) => {
-    const p = req.params.product || 'muse';
+  // Guided apps (validated against product registry)
+  app.get('/api/apps/:product', requireUser, (req, res) => {
+    const p = req.params.product;
+    if (!isKnownProduct(p)) {
+      return res.status(400).json({ error: `Unknown product "${p}".` });
+    }
     const apps = getGuidedApps(p);
     res.json(apps);
   });
 
-  // Admin Passcode Verification
-  app.post('/api/admin/verify', (req, res) => {
-    const { passcode } = req.body;
-    if (passcode === config.adminPasscode) {
-      res.json({ authorized: true });
-    } else {
-      res.status(401).json({ authorized: false, error: 'Incorrect passcode' });
-    }
-  });
+  // Admin Dashboard Data (requires Google sign-in + email in ADMIN_EMAILS)
+  app.use('/api/admin', requireUser, requireAdmin);
 
-  // Admin Dashboard Data
-  app.get('/api/admin/data', async (req, res) => {
-    const passcode = req.headers['x-admin-passcode'] as string;
-    if (passcode !== config.adminPasscode) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
+  app.get('/api/admin/data', async (_req, res) => {
     // Refresh health status
     await runModelHealthCheck();
 
-    const escalations = getEscalations();
-    const products = getAvailableProducts();
+    const products = getAllRegisteredProducts();
     const knowledgeFiles = products.map(p => getKnowledge(p));
 
     res.json({
       health: currentHealthStatus,
-      escalations,
       knowledgeFiles,
       config: {
         liveModel: config.liveModel,
-        liveModelDeep: config.liveModelDeep,
         textModel: config.textModel,
-        calendarIcsUrlSet: Boolean(config.calendarIcsUrl),
+        textModelFallback: config.textModelFallback || null,
+        thinkingLevels: getThinkingLevelsConfig(),
         bookingUrl: config.bookingUrl,
-        escalationWebhookUrlSet: Boolean(config.escalationWebhookUrl),
+        sheetUrl: config.sheetUrl,
+        sheetWebhookUrlSet: Boolean(config.sheetWebhookUrl),
         ownerEmail: config.ownerEmail,
         ownerName: config.ownerName,
         ownerTimezone: config.ownerTimezone,
-        workingHours: config.workingHours,
       },
     });
   });
@@ -193,7 +321,7 @@ async function startServer() {
   // Mount Vite or static dist
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     });
   } else {
