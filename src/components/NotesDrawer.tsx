@@ -27,6 +27,7 @@ interface NotesDrawerProps {
   onSaveProgressSummary: (newSummaryText: string) => Promise<void>;
   onDeleteProgressSummary: () => Promise<void>;
   pastConversations: StoredConversation[];
+  onLoadConversation?: (conversationId: string) => Promise<StoredConversation | null>;
   onDeleteConversation: (conversationId: string) => Promise<void>;
   onDeleteAllHistory: () => Promise<void>;
 }
@@ -43,6 +44,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
   onSaveProgressSummary,
   onDeleteProgressSummary,
   pastConversations,
+  onLoadConversation,
   onDeleteConversation,
   onDeleteAllHistory,
 }) => {
@@ -50,12 +52,56 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
   const [summaryDraft, setSummaryDraft] = useState<string>('');
   const [isSavingSummary, setIsSavingSummary] = useState<boolean>(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [loadedConversation, setLoadedConversation] = useState<StoredConversation | null>(null);
+  const [isLoadingConversation, setIsLoadingConversation] = useState<boolean>(false);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState<boolean>(false);
   const [isDeletingAll, setIsDeletingAll] = useState<boolean>(false);
 
   useEffect(() => {
     setSummaryDraft(progressSummary?.summary || '');
   }, [progressSummary]);
+
+  useEffect(() => {
+    if (!selectedConversationId) {
+      setLoadedConversation(null);
+      setIsLoadingConversation(false);
+      return;
+    }
+
+    let cancelled = false;
+    const baseItem = pastConversations.find(c => c.id === selectedConversationId) || null;
+    if (baseItem && baseItem.messages && baseItem.messages.length > 0) {
+      setLoadedConversation(baseItem);
+      setIsLoadingConversation(false);
+      return;
+    }
+
+    if (onLoadConversation) {
+      setIsLoadingConversation(true);
+      onLoadConversation(selectedConversationId)
+        .then(fullConv => {
+          if (!cancelled) {
+            setLoadedConversation(fullConv || baseItem);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setLoadedConversation(baseItem);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setIsLoadingConversation(false);
+          }
+        });
+    } else {
+      setLoadedConversation(baseItem);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedConversationId, pastConversations, onLoadConversation]);
 
   if (!isOpen) return null;
 
@@ -89,7 +135,8 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
     return 'Conversation saved';
   };
 
-  const selectedConversation = pastConversations.find(c => c.id === selectedConversationId) || null;
+  const selectedConversation =
+    loadedConversation || pastConversations.find(c => c.id === selectedConversationId) || null;
 
   const handleSaveSummaryClick = async () => {
     setIsSavingSummary(true);
@@ -112,6 +159,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
     try {
       await onDeleteAllHistory();
       setSelectedConversationId(null);
+      setLoadedConversation(null);
       setConfirmDeleteAll(false);
     } finally {
       setIsDeletingAll(false);
@@ -164,6 +212,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
                   onClick={async () => {
                     const idToDelete = selectedConversation.id;
                     setSelectedConversationId(null);
+                    setLoadedConversation(null);
                     await onDeleteConversation(idToDelete);
                   }}
                   className="flex items-center gap-1 text-[#9A3412] hover:text-red-700 font-medium"
@@ -186,7 +235,11 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
             )}
 
             <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {selectedConversation.messages.length === 0 ? (
+              {isLoadingConversation ? (
+                <p className="text-xs text-[#78716C] italic text-center py-8">
+                  Loading conversation...
+                </p>
+              ) : selectedConversation.messages.length === 0 ? (
                 <p className="text-xs text-[#78716C] italic text-center py-8">
                   No messages in this conversation.
                 </p>

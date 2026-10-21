@@ -6,7 +6,12 @@ interface RateBucket {
 
 const buckets = new Map<string, RateBucket>();
 
-function checkRateLimit(key: string, maxRequests: number, windowMs: number): boolean {
+function checkRateLimit(
+  key: string,
+  maxRequests: number,
+  windowMs: number,
+  increment: boolean = true
+): boolean {
   const now = Date.now();
   const cutoff = now - windowMs;
   const bucket = buckets.get(key) || { timestamps: [] };
@@ -18,9 +23,22 @@ function checkRateLimit(key: string, maxRequests: number, windowMs: number): boo
     return false;
   }
 
-  bucket.timestamps.push(now);
+  if (increment) {
+    bucket.timestamps.push(now);
+  }
   buckets.set(key, bucket);
   return true;
+}
+
+export function recordRateLimitHit(bucketPrefix: string, uid: string, windowMs: number) {
+  if (!uid) return;
+  const key = `${bucketPrefix}:${uid}`;
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  const bucket = buckets.get(key) || { timestamps: [] };
+  bucket.timestamps = bucket.timestamps.filter((t) => t > cutoff);
+  bucket.timestamps.push(now);
+  buckets.set(key, bucket);
 }
 
 export function createUidRateLimiter(opts: {
@@ -28,6 +46,7 @@ export function createUidRateLimiter(opts: {
   maxRequests: number;
   windowMs: number;
   message: string;
+  incrementOnCheck?: boolean;
 }) {
   return (req: Request, res: Response, next: NextFunction) => {
     const uid = req.user?.uid;
@@ -36,7 +55,12 @@ export function createUidRateLimiter(opts: {
     }
 
     const key = `${opts.bucketPrefix}:${uid}`;
-    const allowed = checkRateLimit(key, opts.maxRequests, opts.windowMs);
+    const allowed = checkRateLimit(
+      key,
+      opts.maxRequests,
+      opts.windowMs,
+      opts.incrementOnCheck !== false
+    );
     if (!allowed) {
       return res.status(429).json({
         error: opts.message,
@@ -57,14 +81,21 @@ export const rateLimitChat = createUidRateLimiter({
     "You've sent quite a few messages in the last minute. Let's pause for a moment—please wait a minute before sending another message.",
 });
 
-// /api/report (and /api/escalate): 5 requests per day per uid
+const REPORT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// /api/report (and /api/escalate): 5 successful sends per day per uid
 export const rateLimitReport = createUidRateLimiter({
   bucketPrefix: 'report',
   maxRequests: 5,
-  windowMs: 24 * 60 * 60 * 1000,
+  windowMs: REPORT_WINDOW_MS,
+  incrementOnCheck: false,
   message:
     "You've reached the daily limit of 5 handoff reports to Nic. You can still use Nic's direct booking link to schedule a time.",
 });
+
+export function recordReportSendSuccess(uid: string) {
+  recordRateLimitHit('report', uid, REPORT_WINDOW_MS);
+}
 
 // /api/summarize: 20 requests per hour per uid
 export const rateLimitSummarize = createUidRateLimiter({
@@ -83,4 +114,18 @@ export const rateLimitReportDraft = createUidRateLimiter({
   message:
     "You've reached the hourly limit of 10 report drafts. You can still type or edit your note to Nic directly.",
 });
+
+// /api/tools-share: 10 sends per day per uid
+export const rateLimitToolsShare = createUidRateLimiter({
+  bucketPrefix: 'toolsShare',
+  maxRequests: 10,
+  windowMs: REPORT_WINDOW_MS,
+  incrementOnCheck: false,
+  message:
+    "You've reached the daily limit of 10 anonymous tool list updates to Nic.",
+});
+
+export function recordToolsShareSuccess(uid: string) {
+  recordRateLimitHit('toolsShare', uid, REPORT_WINDOW_MS);
+}
 

@@ -12,7 +12,6 @@ import {
   doc,
   setDoc,
   getDoc,
-  getDocFromServer,
   collection,
   addDoc,
   getDocs,
@@ -79,17 +78,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-testConnection();
-
 export interface AuthUser {
   uid: string;
   displayName: string | null;
@@ -105,12 +93,41 @@ export interface SessionNote {
   createdAt: string;
 }
 
+export type StepEvidence = 'screen' | 'user' | 'self';
+
+export interface CompletedStepRecord {
+  step: number;
+  evidence: StepEvidence;
+  note?: string;
+  at: string;
+}
+
+export interface RoutineProgressDoc {
+  appId: string;
+  status: 'not-started' | 'in-progress' | 'done';
+  completedSteps: CompletedStepRecord[];
+  activeStep: number;
+  updatedAt: string;
+}
+
 export interface StoredRoutineStep {
   number: number;
   title: string;
   detail: string;
   completed?: boolean;
   coachPrompt?: string;
+  coach?: string;
+  why?: string;
+  where?: string;
+  done_when?: string;
+  verify?: 'user' | 'screen' | 'either';
+  if_stuck?: string;
+  safety?: string;
+  area?: string;
+  rating?: string;
+  evidence?: StepEvidence;
+  note?: string;
+  at?: string;
 }
 
 export interface StoredAppCard {
@@ -119,6 +136,43 @@ export interface StoredAppCard {
   goal: string;
   activeStep?: number;
   steps: StoredRoutineStep[];
+}
+
+export interface TaskContractFields {
+  goal: string;
+  do: string;
+  do_not: string;
+  ask_me_before: string;
+  report_back: string;
+  stop_if: string;
+}
+
+export interface ProjectRungHistoryItem {
+  rung: number;
+  at: string;
+}
+
+export interface UserProjectDoc {
+  projectId: string;
+  title?: string;
+  product?: string;
+  contract: TaskContractFields;
+  rung: 0 | 1 | 2 | 3;
+  status: 'active' | 'paused';
+  history: ProjectRungHistoryItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StoredContractCard {
+  projectId: string;
+  title: string;
+  contract: TaskContractFields;
+  rung: 0 | 1 | 2 | 3;
+  rungName: string;
+  rungText?: string;
+  ladder?: Array<{ rung: number; name: string; text: string }>;
+  saved?: boolean;
 }
 
 export interface StoredMessage {
@@ -132,7 +186,9 @@ export interface StoredMessage {
     goal: string;
     tried: string;
     blocker: string;
+    sentRefId?: string;
   };
+  contractCard?: StoredContractCard;
   bookingUrl?: string;
 }
 
@@ -165,6 +221,36 @@ function toIsoString(val: any): string {
   return new Date().toISOString();
 }
 
+export function clampRung(val: any): 0 | 1 | 2 | 3 {
+  const num = Number(val);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  if (num >= 3) return 3;
+  return Math.round(num) as 0 | 1 | 2 | 3;
+}
+
+export function doesContractDoRestrictPastRung2(doText: string): boolean {
+  const lower = String(doText || '').toLowerCase();
+  if (!lower) return false;
+  return (
+    /\b(purchase|purchases|buy|buying|pay|payment|payments|order|checkout)\b/.test(lower) ||
+    /\b(public post|public posts|post publicly|publish publicly|social media post)\b/.test(lower) ||
+    /\b(send to others|email others|message others|reply to others|forward to others|invite others)\b/.test(lower)
+  );
+}
+
+function sanitizeContractFields(raw: any): TaskContractFields {
+  return {
+    goal: typeof raw?.goal === 'string' ? raw.goal.trim().slice(0, 1000) : '',
+    do: typeof raw?.do === 'string' ? raw.do.trim().slice(0, 1500) : '',
+    do_not: typeof raw?.do_not === 'string' ? raw.do_not.trim().slice(0, 1500) : '',
+    ask_me_before:
+      typeof raw?.ask_me_before === 'string' ? raw.ask_me_before.trim().slice(0, 1000) : '',
+    report_back:
+      typeof raw?.report_back === 'string' ? raw.report_back.trim().slice(0, 1000) : '',
+    stop_if: typeof raw?.stop_if === 'string' ? raw.stop_if.trim().slice(0, 1000) : '',
+  };
+}
+
 function sanitizeMessageForFirestore(m: any): StoredMessage {
   const source: 'typed' | 'spoken' | 'system' =
     m?.source === 'spoken'
@@ -192,11 +278,47 @@ function sanitizeMessageForFirestore(m: any): StoredMessage {
             const stepObj: StoredRoutineStep = {
               number: Number(s?.number || 1),
               title: String(s?.title || ''),
-              detail: String(s?.detail || ''),
+              detail: String(s?.detail || s?.why || ''),
               completed: Boolean(s?.completed),
             };
             if (typeof s?.coachPrompt === 'string' && s.coachPrompt) {
               stepObj.coachPrompt = s.coachPrompt;
+            }
+            if (typeof s?.coach === 'string' && s.coach) {
+              stepObj.coach = s.coach;
+            }
+            if (typeof s?.why === 'string' && s.why) {
+              stepObj.why = s.why;
+            }
+            if (typeof s?.where === 'string' && s.where) {
+              stepObj.where = s.where;
+            }
+            if (typeof s?.done_when === 'string' && s.done_when) {
+              stepObj.done_when = s.done_when;
+            }
+            if (s?.verify === 'user' || s?.verify === 'screen' || s?.verify === 'either') {
+              stepObj.verify = s.verify;
+            }
+            if (typeof s?.if_stuck === 'string' && s.if_stuck) {
+              stepObj.if_stuck = s.if_stuck;
+            }
+            if (typeof s?.safety === 'string' && s.safety) {
+              stepObj.safety = s.safety;
+            }
+            if (typeof s?.area === 'string' && s.area) {
+              stepObj.area = s.area;
+            }
+            if (typeof s?.rating === 'string' && s.rating) {
+              stepObj.rating = s.rating;
+            }
+            if (s?.evidence === 'screen' || s?.evidence === 'user' || s?.evidence === 'self') {
+              stepObj.evidence = s.evidence;
+            }
+            if (typeof s?.note === 'string' && s.note) {
+              stepObj.note = s.note;
+            }
+            if (typeof s?.at === 'string' && s.at) {
+              stepObj.at = s.at;
             }
             return stepObj;
           })
@@ -205,11 +327,37 @@ function sanitizeMessageForFirestore(m: any): StoredMessage {
   }
 
   if (m?.reportCard && typeof m.reportCard === 'object') {
-    clean.reportCard = {
+    const cardObj: NonNullable<StoredMessage['reportCard']> = {
       goal: String(m.reportCard.goal || ''),
       tried: String(m.reportCard.tried || ''),
       blocker: String(m.reportCard.blocker || ''),
     };
+    if (typeof m.reportCard.sentRefId === 'string' && m.reportCard.sentRefId.trim()) {
+      cardObj.sentRefId = m.reportCard.sentRefId.trim();
+    }
+    clean.reportCard = cardObj;
+  }
+
+  if (m?.contractCard && typeof m.contractCard === 'object') {
+    const cc: StoredContractCard = {
+      projectId: String(m.contractCard.projectId || '').trim(),
+      title: String(m.contractCard.title || m.contractCard.projectId || '').trim(),
+      contract: sanitizeContractFields(m.contractCard.contract),
+      rung: clampRung(m.contractCard.rung),
+      rungName: String(m.contractCard.rungName || 'Watch').trim(),
+      saved: Boolean(m.contractCard.saved),
+    };
+    if (typeof m.contractCard.rungText === 'string' && m.contractCard.rungText.trim()) {
+      cc.rungText = m.contractCard.rungText.trim().slice(0, 400);
+    }
+    if (Array.isArray(m.contractCard.ladder)) {
+      cc.ladder = m.contractCard.ladder.map((l: any) => ({
+        rung: clampRung(l?.rung),
+        name: String(l?.name || '').trim(),
+        text: String(l?.text || '').trim(),
+      }));
+    }
+    clean.contractCard = cc;
   }
 
   if (typeof m?.bookingUrl === 'string' && m.bookingUrl) {
@@ -448,6 +596,10 @@ export async function saveConversation(
   }
 }
 
+/**
+ * Returns lightweight conversation list (id, product, startedAt, updatedAt, summary only).
+ * Full messages are fetched on-demand via getUserConversation when a past conversation is opened.
+ */
 export async function listUserConversations(uid: string): Promise<StoredConversation[]> {
   if (!uid) return [];
   try {
@@ -457,16 +609,13 @@ export async function listUserConversations(uid: string): Promise<StoredConversa
 
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
-      const msgs = Array.isArray(data.messages)
-        ? data.messages.slice(-400).map(sanitizeMessageForFirestore)
-        : [];
       list.push({
         id: docSnap.id,
         product: data.product || 'muse',
         startedAt: toIsoString(data.startedAt),
         updatedAt: toIsoString(data.updatedAt),
         summary: typeof data.summary === 'string' ? data.summary : undefined,
-        messages: msgs,
+        messages: [],
       });
     });
 
@@ -476,6 +625,49 @@ export async function listUserConversations(uid: string): Promise<StoredConversa
     console.warn('Error listing conversations from Firestore:', err);
     return [];
   }
+}
+
+export async function getUserConversation(
+  uid: string,
+  conversationId: string
+): Promise<StoredConversation | null> {
+  if (!uid || !conversationId) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'conversations', conversationId));
+    if (snap.exists()) {
+      const data = snap.data();
+      const msgs = Array.isArray(data.messages)
+        ? data.messages.slice(-400).map(sanitizeMessageForFirestore)
+        : [];
+      return {
+        id: snap.id,
+        product: data.product || 'muse',
+        startedAt: toIsoString(data.startedAt),
+        updatedAt: toIsoString(data.updatedAt),
+        summary: typeof data.summary === 'string' ? data.summary : undefined,
+        messages: msgs,
+      };
+    }
+  } catch (err) {
+    console.warn('Error fetching conversation from Firestore:', err);
+  }
+  try {
+    const raw = localStorage.getItem(`conv_${uid}_${conversationId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        id: parsed.id || conversationId,
+        product: parsed.product || 'muse',
+        startedAt: toIsoString(parsed.startedAt),
+        updatedAt: toIsoString(parsed.updatedAt),
+        summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
+        messages: Array.isArray(parsed.messages)
+          ? parsed.messages.slice(-400).map(sanitizeMessageForFirestore)
+          : [],
+      };
+    }
+  } catch (_) {}
+  return null;
 }
 
 export async function getRecentProductConversation(
@@ -625,12 +817,512 @@ export async function deleteUserProgressSummary(uid: string, product: string): P
 }
 
 /**
- * Deletes all history for a user: conversations, progress summaries, and session notes.
+ * Routine progress persistence at users/{uid}/routines/{appId}
+ * { status: "not-started" | "in-progress" | "done", completedSteps: [{ step, evidence, note, at }], activeStep, updatedAt }
  */
-export async function deleteAllUserHistory(uid: string): Promise<void> {
-  if (!uid) return;
+function sanitizeCompletedStep(item: any): CompletedStepRecord {
+  const evidence: StepEvidence =
+    item?.evidence === 'screen' || item?.evidence === 'user' || item?.evidence === 'self'
+      ? item.evidence
+      : 'self';
+  const rec: CompletedStepRecord = {
+    step: Number(item?.step || 1),
+    evidence,
+    at: typeof item?.at === 'string' && item.at ? item.at : new Date().toISOString(),
+  };
+  if (typeof item?.note === 'string' && item.note.trim()) {
+    rec.note = item.note.trim().slice(0, 300);
+  }
+  return rec;
+}
 
-  // Clear local storage keys for this uid
+export async function getUserRoutinesProgress(
+  uid: string
+): Promise<Record<string, RoutineProgressDoc>> {
+  if (!uid) return {};
+  const map: Record<string, RoutineProgressDoc> = {};
+
+  // Read local fallback first so we have immediate defaults
+  try {
+    const raw = localStorage.getItem(`routines_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        Object.assign(map, parsed);
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const colRef = collection(db, 'users', uid, 'routines');
+    const snap = await getDocs(colRef);
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      const status =
+        d.status === 'done' || d.status === 'in-progress' ? d.status : 'not-started';
+      const completedSteps = Array.isArray(d.completedSteps)
+        ? d.completedSteps.map(sanitizeCompletedStep)
+        : [];
+      map[docSnap.id] = {
+        appId: docSnap.id,
+        status,
+        completedSteps,
+        activeStep: typeof d.activeStep === 'number' && d.activeStep > 0 ? d.activeStep : 1,
+        updatedAt: toIsoString(d.updatedAt),
+      };
+    });
+
+    try {
+      localStorage.setItem(`routines_${uid}`, JSON.stringify(map));
+    } catch (_) {}
+  } catch (err) {
+    console.warn('Error fetching user routine progress from Firestore:', err);
+  }
+
+  return map;
+}
+
+export async function getUserRoutineProgress(
+  uid: string,
+  appId: string
+): Promise<RoutineProgressDoc | null> {
+  if (!uid || !appId) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'routines', appId));
+    if (snap.exists()) {
+      const d = snap.data();
+      const status =
+        d.status === 'done' || d.status === 'in-progress' ? d.status : 'not-started';
+      return {
+        appId: snap.id,
+        status,
+        completedSteps: Array.isArray(d.completedSteps)
+          ? d.completedSteps.map(sanitizeCompletedStep)
+          : [],
+        activeStep: typeof d.activeStep === 'number' && d.activeStep > 0 ? d.activeStep : 1,
+        updatedAt: toIsoString(d.updatedAt),
+      };
+    }
+  } catch (err) {
+    console.warn(`Error fetching routine progress for ${appId}:`, err);
+  }
+
+  try {
+    const raw = localStorage.getItem(`routines_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed[appId]) return parsed[appId];
+    }
+  } catch (_) {}
+  return null;
+}
+
+export async function saveUserRoutineProgress(
+  uid: string,
+  appId: string,
+  data: {
+    status: 'not-started' | 'in-progress' | 'done';
+    completedSteps: CompletedStepRecord[];
+    activeStep: number;
+  }
+): Promise<RoutineProgressDoc> {
+  const nowIso = new Date().toISOString();
+  const cleanSteps = (Array.isArray(data.completedSteps) ? data.completedSteps : []).map(
+    sanitizeCompletedStep
+  );
+  const docObj: RoutineProgressDoc = {
+    appId,
+    status: data.status,
+    completedSteps: cleanSteps,
+    activeStep: typeof data.activeStep === 'number' && data.activeStep > 0 ? data.activeStep : 1,
+    updatedAt: nowIso,
+  };
+
+  try {
+    const raw = localStorage.getItem(`routines_${uid}`);
+    const existing = raw ? JSON.parse(raw) : {};
+    existing[appId] = docObj;
+    localStorage.setItem(`routines_${uid}`, JSON.stringify(existing));
+  } catch (_) {}
+
+  if (uid && appId) {
+    try {
+      await setDoc(
+        doc(db, 'users', uid, 'routines', appId),
+        {
+          status: docObj.status,
+          completedSteps: docObj.completedSteps,
+          activeStep: docObj.activeStep,
+          updatedAt: docObj.updatedAt,
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn(`Error saving routine progress for ${appId} to Firestore:`, err);
+    }
+  }
+
+  return docObj;
+}
+
+export interface UserToolEntry {
+  id: string;
+  name: string;
+  category: string;
+  account: 'personal' | 'work';
+  sensitive: boolean;
+}
+
+export interface ToolsProfileDoc {
+  devices: string[];
+  tools: UserToolEntry[];
+  other: string;
+  updatedAt: string;
+}
+
+function sanitizeUserToolEntry(item: any): UserToolEntry | null {
+  if (!item || typeof item !== 'object') return null;
+  const id = typeof item.id === 'string' ? item.id.trim() : '';
+  if (!id) return null;
+  return {
+    id,
+    name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : id,
+    category: typeof item.category === 'string' && item.category.trim() ? item.category.trim() : 'other',
+    account: item.account === 'work' ? 'work' : 'personal',
+    sensitive: Boolean(item.sensitive),
+  };
+}
+
+/**
+ * User's "Your tools" profile at users/{uid}/profile/tools
+ * { devices: [], tools: [{ id, name, category, account: "personal" | "work", sensitive: boolean }], other: string, updatedAt }
+ */
+export async function getUserToolsProfile(uid: string): Promise<ToolsProfileDoc | null> {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'profile', 'tools'));
+    if (snap.exists()) {
+      const data = snap.data();
+      const devices = Array.isArray(data.devices)
+        ? data.devices.map((d: any) => String(d).trim()).filter(Boolean)
+        : [];
+      const tools = Array.isArray(data.tools)
+        ? (data.tools.map(sanitizeUserToolEntry).filter(Boolean) as UserToolEntry[])
+        : [];
+      const other = typeof data.other === 'string' ? data.other.slice(0, 300) : '';
+      const docObj: ToolsProfileDoc = {
+        devices,
+        tools,
+        other,
+        updatedAt: toIsoString(data.updatedAt),
+      };
+      try {
+        localStorage.setItem(`tools_profile_${uid}`, JSON.stringify(docObj));
+      } catch (_) {}
+      return docObj;
+    }
+  } catch (err) {
+    console.warn('Error reading tools profile from Firestore:', err);
+  }
+
+  try {
+    const raw = localStorage.getItem(`tools_profile_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          devices: Array.isArray(parsed.devices) ? parsed.devices.map(String) : [],
+          tools: Array.isArray(parsed.tools)
+            ? (parsed.tools.map(sanitizeUserToolEntry).filter(Boolean) as UserToolEntry[])
+            : [],
+          other: typeof parsed.other === 'string' ? parsed.other.slice(0, 300) : '',
+          updatedAt: toIsoString(parsed.updatedAt),
+        };
+      }
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+export async function saveUserToolsProfile(
+  uid: string,
+  profileData: {
+    devices: string[];
+    tools: UserToolEntry[];
+    other: string;
+  }
+): Promise<ToolsProfileDoc> {
+  const nowIso = new Date().toISOString();
+  const cleanDevices = Array.from(
+    new Set(
+      (Array.isArray(profileData.devices) ? profileData.devices : [])
+        .map(d => String(d || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const cleanTools = (Array.isArray(profileData.tools) ? profileData.tools : [])
+    .map(sanitizeUserToolEntry)
+    .filter(Boolean) as UserToolEntry[];
+  const cleanOther = typeof profileData.other === 'string' ? profileData.other.trim().slice(0, 300) : '';
+
+  const docObj: ToolsProfileDoc = {
+    devices: cleanDevices,
+    tools: cleanTools,
+    other: cleanOther,
+    updatedAt: nowIso,
+  };
+
+  if (uid) {
+    try {
+      localStorage.setItem(`tools_profile_${uid}`, JSON.stringify(docObj));
+    } catch (_) {}
+
+    try {
+      await setDoc(doc(db, 'users', uid, 'profile', 'tools'), docObj, { merge: true });
+    } catch (err) {
+      console.warn('Error saving tools profile to Firestore:', err);
+      throw new Error(
+        "I couldn't save your tools profile to your account just now. It is kept in this browser — check your connection."
+      );
+    }
+  }
+
+  return docObj;
+}
+
+/**
+ * User's saved project contracts at users/{uid}/projects/{project_id}:
+ * { contract, rung (0-3), status: "active" | "paused", history: [{ rung, at }], createdAt, updatedAt }
+ */
+function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
+  const nowIso = new Date().toISOString();
+  const contract = sanitizeContractFields(d?.contract);
+  let rung = clampRung(d?.rung);
+  if (doesContractDoRestrictPastRung2(contract.do) && rung > 2) {
+    rung = 2;
+  }
+  const status: 'active' | 'paused' = d?.status === 'paused' ? 'paused' : 'active';
+  const createdAt = toIsoString(d?.createdAt || d?.updatedAt || nowIso);
+  const updatedAt = toIsoString(d?.updatedAt || nowIso);
+  const rawHistory = Array.isArray(d?.history) ? d.history : [];
+  const history: ProjectRungHistoryItem[] =
+    rawHistory.length > 0
+      ? rawHistory.map((h: any) => ({
+          rung: clampRung(h?.rung),
+          at: toIsoString(h?.at || updatedAt),
+        }))
+      : [{ rung, at: createdAt }];
+
+  const docObj: UserProjectDoc = {
+    projectId,
+    contract,
+    rung,
+    status,
+    history,
+    createdAt,
+    updatedAt,
+  };
+  if (typeof d?.title === 'string' && d.title.trim()) {
+    docObj.title = d.title.trim().slice(0, 200);
+  }
+  if (typeof d?.product === 'string' && d.product.trim()) {
+    docObj.product = d.product.trim().slice(0, 100);
+  }
+  return docObj;
+}
+
+export async function getUserProjects(uid: string): Promise<Record<string, UserProjectDoc>> {
+  if (!uid) return {};
+  const map: Record<string, UserProjectDoc> = {};
+
+  try {
+    const raw = localStorage.getItem(`projects_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          map[k] = sanitizeProjectDoc(k, v);
+        }
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const colRef = collection(db, 'users', uid, 'projects');
+    const snap = await getDocs(colRef);
+    const freshMap: Record<string, UserProjectDoc> = {};
+    snap.forEach(docSnap => {
+      freshMap[docSnap.id] = sanitizeProjectDoc(docSnap.id, docSnap.data());
+    });
+    try {
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(freshMap));
+    } catch (_) {}
+    return freshMap;
+  } catch (err) {
+    console.warn('Error fetching user projects from Firestore:', err);
+  }
+
+  return map;
+}
+
+export async function saveUserProjectContract(
+  uid: string,
+  projectId: string,
+  data: {
+    title?: string;
+    product?: string;
+    contract: TaskContractFields;
+    rung: number;
+    status?: 'active' | 'paused';
+  }
+): Promise<UserProjectDoc> {
+  const cleanId = String(projectId || '').trim() || 'first-task';
+  const nowIso = new Date().toISOString();
+  const cleanContract = sanitizeContractFields(data.contract);
+  let targetRung = clampRung(data.rung);
+  if (doesContractDoRestrictPastRung2(cleanContract.do) && targetRung > 2) {
+    targetRung = 2;
+  }
+
+  let existing: UserProjectDoc | null = null;
+  try {
+    const raw = localStorage.getItem(`projects_${uid}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed[cleanId]) {
+        existing = sanitizeProjectDoc(cleanId, parsed[cleanId]);
+      }
+    }
+  } catch (_) {}
+
+  if (!existing && uid) {
+    try {
+      const snap = await getDoc(doc(db, 'users', uid, 'projects', cleanId));
+      if (snap.exists()) {
+        existing = sanitizeProjectDoc(cleanId, snap.data());
+      }
+    } catch (_) {}
+  }
+
+  const createdAt = existing?.createdAt || nowIso;
+  const status: 'active' | 'paused' = data.status || existing?.status || 'active';
+  const prevHistory = existing?.history ? [...existing.history] : [];
+  const lastHistoryRung =
+    prevHistory.length > 0 ? prevHistory[prevHistory.length - 1].rung : null;
+  if (prevHistory.length === 0 || lastHistoryRung !== targetRung) {
+    prevHistory.push({ rung: targetRung, at: nowIso });
+  }
+
+  const docObj: UserProjectDoc = {
+    projectId: cleanId,
+    title: data.title?.trim() || existing?.title,
+    product: data.product?.trim() || existing?.product,
+    contract: cleanContract,
+    rung: targetRung,
+    status,
+    history: prevHistory,
+    createdAt,
+    updatedAt: nowIso,
+  };
+
+  if (uid) {
+    try {
+      const raw = localStorage.getItem(`projects_${uid}`);
+      const all = raw ? JSON.parse(raw) : {};
+      all[cleanId] = docObj;
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(all));
+    } catch (_) {}
+
+    const firestorePayload: Record<string, any> = {
+      contract: docObj.contract,
+      rung: docObj.rung,
+      status: docObj.status,
+      history: docObj.history,
+      createdAt: docObj.createdAt,
+      updatedAt: docObj.updatedAt,
+    };
+    if (docObj.title) firestorePayload.title = docObj.title;
+    if (docObj.product) firestorePayload.product = docObj.product;
+
+    try {
+      await setDoc(doc(db, 'users', uid, 'projects', cleanId), firestorePayload, { merge: true });
+    } catch (err) {
+      console.warn(`Error saving project contract ${cleanId} to Firestore:`, err);
+      throw new Error(
+        "I couldn't save your project contract to your account just now. It is kept in this browser — check your connection."
+      );
+    }
+  }
+
+  return docObj;
+}
+
+export async function updateUserProjectStatus(
+  uid: string,
+  projectId: string,
+  status: 'active' | 'paused'
+): Promise<UserProjectDoc | null> {
+  if (!uid || !projectId) return null;
+  const nowIso = new Date().toISOString();
+
+  let updatedDoc: UserProjectDoc | null = null;
+  try {
+    const raw = localStorage.getItem(`projects_${uid}`);
+    const all = raw ? JSON.parse(raw) : {};
+    if (all[projectId]) {
+      all[projectId] = {
+        ...all[projectId],
+        status,
+        updatedAt: nowIso,
+      };
+      updatedDoc = sanitizeProjectDoc(projectId, all[projectId]);
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(all));
+    }
+  } catch (_) {}
+
+  try {
+    await setDoc(
+      doc(db, 'users', uid, 'projects', projectId),
+      { status, updatedAt: nowIso },
+      { merge: true }
+    );
+    if (!updatedDoc) {
+      const snap = await getDoc(doc(db, 'users', uid, 'projects', projectId));
+      if (snap.exists()) {
+        updatedDoc = sanitizeProjectDoc(projectId, snap.data());
+      }
+    }
+  } catch (err) {
+    console.warn(`Error updating project status for ${projectId}:`, err);
+  }
+
+  return updatedDoc;
+}
+
+export async function deleteUserProject(uid: string, projectId: string): Promise<void> {
+  if (!uid || !projectId) return;
+  try {
+    const raw = localStorage.getItem(`projects_${uid}`);
+    if (raw) {
+      const all = JSON.parse(raw);
+      delete all[projectId];
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(all));
+    }
+  } catch (_) {}
+
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'projects', projectId));
+  } catch (err) {
+    console.warn(`Error deleting project ${projectId} from Firestore:`, err);
+  }
+}
+
+/**
+ * Removes all localStorage keys starting with conv_, latest_conv_, progress_, notes_, routines_, tools_profile_, projects_ for a given uid.
+ */
+export function clearUserLocalStorage(uid: string): void {
+  if (!uid) return;
   try {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -640,16 +1332,29 @@ export async function deleteAllUserHistory(uid: string): Promise<void> {
         (k.startsWith(`conv_${uid}_`) ||
           k.startsWith(`latest_conv_${uid}_`) ||
           k.startsWith(`progress_${uid}_`) ||
-          k.startsWith(`notes_${uid}_`))
+          k.startsWith(`notes_${uid}_`) ||
+          k === `routines_${uid}` ||
+          k.startsWith(`routines_${uid}_`) ||
+          k === `tools_profile_${uid}` ||
+          k === `projects_${uid}`)
       ) {
         keysToRemove.push(k);
       }
     }
     keysToRemove.forEach(k => localStorage.removeItem(k));
   } catch (_) {}
+}
+
+/**
+ * Deletes all history for a user: conversations, progress summaries, session notes, routine progress, tools profile, and projects.
+ */
+export async function deleteAllUserHistory(uid: string): Promise<void> {
+  if (!uid) return;
+
+  clearUserLocalStorage(uid);
 
   try {
-    const subcollections = ['conversations', 'progress', 'notes'];
+    const subcollections = ['conversations', 'progress', 'notes', 'routines', 'profile', 'projects'];
     for (const sub of subcollections) {
       const colRef = collection(db, 'users', uid, sub);
       const snap = await getDocs(colRef);

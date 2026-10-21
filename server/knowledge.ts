@@ -1,12 +1,23 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import YAML from 'yaml';
 import { config } from './config.js';
 import { PRODUCTS, getEnabledProducts, getProductById } from './products.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
+
+export interface KnowledgeTagCounts {
+  SEEN: number;
+  DOC: number;
+  SAID: number;
+  WEB: number;
+  INFERRED: number;
+  UNKNOWN: number;
+  NIC: number;
+}
 
 export interface KnowledgeInfo {
   product: string;
@@ -15,26 +26,74 @@ export interface KnowledgeInfo {
   lastChecked: string;
   daysOld: number;
   isStale: boolean; // > 14 days old
-  metaStatementsCount: number;
-  reportedStatementsCount: number;
-  unverifiedStatementsCount: number;
+  tagCounts: KnowledgeTagCounts;
   content: string;
+  playbookTitle: string;
+  playbookFilePath: string;
+  playbookLastChecked: string;
+  playbookContent: string;
 }
+
+export type RoutineType = 'setup' | 'project' | 'checkup' | 'support';
+export type VerifyMethod = 'user' | 'screen' | 'either';
 
 export interface GuidedAppStep {
   number: number;
   title: string;
-  detail: string;
+  coach: string;
+  done_when: string;
+  verify: VerifyMethod;
+  where?: string;
+  why?: string;
+  if_stuck?: string;
+  safety?: string;
+  area?: string;
+  rating?: string;
+  // Backward compatibility with stored conversations
   coachPrompt?: string;
+  detail: string;
+}
+
+export interface GuidedAppContract {
+  goal?: string;
+  do?: string;
+  do_not?: string;
+  ask_me_before?: string;
+  report_back?: string;
+  stop_if?: string;
+}
+
+export interface GuidedAppLadderRung {
+  rung: number;
+  name: string;
+  text: string;
+}
+
+export interface GuidedAppFinish {
+  summarize?: string;
+  save_note?: string;
+  save_contract?: string;
+  save_scorecard?: string;
+  next?: string;
 }
 
 export interface GuidedAppInfo {
   id: string;
   product: string;
   title: string;
+  type: RoutineType;
+  order: number;
+  estimated_time: string;
   estimatedTime: string;
+  risk: string;
+  requires: string[];
+  recommended_after: string[];
+  summary: string;
   goal: string;
   steps: GuidedAppStep[];
+  contract?: GuidedAppContract;
+  ladder?: GuidedAppLadderRung[];
+  finish?: GuidedAppFinish;
   rawContent: string;
 }
 
@@ -54,12 +113,129 @@ export interface ProgressSummaryPayload {
   updatedAt?: string;
 }
 
+export interface UserToolProfileItem {
+  id: string;
+  name: string;
+  category: string;
+  account: 'personal' | 'work';
+  sensitive: boolean;
+}
+
+export interface ToolsProfilePayload {
+  devices?: string[];
+  tools?: UserToolProfileItem[];
+  other?: string;
+  updatedAt?: string;
+}
+
+export interface CatalogToolItem {
+  id: string;
+  name: string;
+  support: 'connector' | 'device' | 'custom' | 'browser' | 'reported' | 'unknown';
+  evidence: string;
+  note?: string;
+}
+
+export interface CatalogCategory {
+  id: string;
+  label: string;
+  tools: CatalogToolItem[];
+}
+
+export interface ToolsCatalog {
+  lastChecked: string;
+  supportLevels: Record<string, string>;
+  categories: CatalogCategory[];
+}
+
+export interface UserProjectPayload {
+  projectId: string;
+  title?: string;
+  rung: number;
+  status?: 'active' | 'paused';
+  contract: {
+    goal?: string;
+    do?: string;
+    do_not?: string;
+    ask_me_before?: string;
+    report_back?: string;
+    stop_if?: string;
+  };
+}
+
 export interface SystemInstructionContext {
   progressSummary?: ProgressSummaryPayload | string | null;
   sessionNotes?: string[];
   routineState?: RoutineStatePayload | null;
+  toolsProfile?: ToolsProfilePayload | null;
+  userProjects?: UserProjectPayload[] | null;
   recentTranscript?: Array<{ role: string; text: string }>;
   extraContext?: string;
+}
+
+export const DEFAULT_LADDER_RUNGS: GuidedAppLadderRung[] = [
+  { rung: 0, name: 'Watch', text: 'Reads and reports only.' },
+  { rung: 1, name: 'Draft', text: 'Prepares; you act.' },
+  { rung: 2, name: 'Act with approval', text: 'Acts after you approve each time.' },
+  { rung: 3, name: 'Standing rule', text: 'One narrow action without asking, reviewed weekly.' },
+];
+
+const KNOWN_FRONTMATTER_KEYS = new Set([
+  'id',
+  'title',
+  'type',
+  'order',
+  'estimated_time',
+  'risk',
+  'requires',
+  'recommended_after',
+  'summary',
+  'goal',
+]);
+
+const KNOWN_STEP_KEYS = new Set([
+  'coach',
+  'done_when',
+  'verify',
+  'where',
+  'why',
+  'if_stuck',
+  'safety',
+  'area',
+  'rating',
+]);
+
+const KNOWN_CONTRACT_KEYS = new Set([
+  'goal',
+  'do',
+  'do_not',
+  'ask_me_before',
+  'report_back',
+  'stop_if',
+]);
+
+const KNOWN_FINISH_KEYS = new Set([
+  'summarize',
+  'save_note',
+  'save_contract',
+  'save_scorecard',
+  'next',
+]);
+
+function stripSurroundingQuotes(val: string): string {
+  const trimmed = val.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function countTagOccurrences(text: string, tag: string): number {
+  const regex = new RegExp(`\\[[^\\]]*\\b${tag}\\b[^\\]]*\\]`, 'gi');
+  return (text.match(regex) || []).length;
 }
 
 export function getAvailableProducts(): string[] {
@@ -81,9 +257,23 @@ export function getKnowledge(product: string = 'muse'): KnowledgeInfo {
     content = `# ${registered?.name || safeId}\nNo knowledge file found.`;
   }
 
+  const playbookPath = path.join(rootDir, 'knowledge', `${safeId}-playbook.md`);
+  const fallbackPlaybookPath = path.join(rootDir, 'knowledge', 'muse-playbook.md');
+  let playbookContent = '';
+  let resolvedPlaybookRelPath = `knowledge/${safeId}-playbook.md`;
+  if (fs.existsSync(playbookPath)) {
+    playbookContent = fs.readFileSync(playbookPath, 'utf-8');
+  } else if (fs.existsSync(fallbackPlaybookPath)) {
+    playbookContent = fs.readFileSync(fallbackPlaybookPath, 'utf-8');
+    resolvedPlaybookRelPath = 'knowledge/muse-playbook.md';
+  }
+
   // Extract last checked date
   const match = content.match(/Last checked:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
-  const lastChecked = match ? match[1] : '2026-10-20';
+  const lastChecked = match ? match[1] : '2026-10-21';
+
+  const playbookDateMatch = playbookContent.match(/Last checked:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/i);
+  const playbookLastChecked = playbookDateMatch ? playbookDateMatch[1] : lastChecked;
 
   const checkedDate = new Date(lastChecked);
   const now = new Date();
@@ -91,12 +281,24 @@ export function getKnowledge(product: string = 'muse'): KnowledgeInfo {
   const daysOld = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   const isStale = daysOld > 14;
 
-  const metaCount = (content.match(/\[Meta\]/gi) || []).length;
-  const reportedCount = (content.match(/\[Reported\]/gi) || []).length;
-  const unverifiedCount = (content.match(/\[Unverified\]/gi) || []).length;
+  const combinedText = `${content}\n${playbookContent}`;
+  const tagCounts: KnowledgeTagCounts = {
+    SEEN: countTagOccurrences(combinedText, 'SEEN'),
+    DOC: countTagOccurrences(combinedText, 'DOC'),
+    SAID: countTagOccurrences(combinedText, 'SAID'),
+    WEB: countTagOccurrences(combinedText, 'WEB'),
+    INFERRED: countTagOccurrences(combinedText, 'INFERRED'),
+    UNKNOWN: countTagOccurrences(combinedText, 'UNKNOWN'),
+    NIC: countTagOccurrences(combinedText, 'NIC'),
+  };
 
   const titleMatch = content.match(/^#\s+(.+)$/m);
-  const title = titleMatch ? titleMatch[1] : (registered?.name || `${safeId.toUpperCase()}`);
+  const title = titleMatch ? titleMatch[1].trim() : registered?.name || `${safeId.toUpperCase()}`;
+
+  const playbookTitleMatch = playbookContent.match(/^#\s+(.+)$/m);
+  const playbookTitle = playbookTitleMatch
+    ? playbookTitleMatch[1].trim()
+    : "Nic's Playbook for Personal AI Agents";
 
   return {
     product: safeId,
@@ -105,10 +307,12 @@ export function getKnowledge(product: string = 'muse'): KnowledgeInfo {
     lastChecked,
     daysOld,
     isStale,
-    metaStatementsCount: metaCount,
-    reportedStatementsCount: reportedCount,
-    unverifiedStatementsCount: unverifiedCount,
+    tagCounts,
     content,
+    playbookTitle,
+    playbookFilePath: resolvedPlaybookRelPath,
+    playbookLastChecked,
+    playbookContent,
   };
 }
 
@@ -119,70 +323,436 @@ export function getGuidedApps(product: string = 'muse'): GuidedAppInfo[] {
   const appsDir = path.join(rootDir, 'apps', safeId);
   if (!fs.existsSync(appsDir)) return [];
 
-  const files = fs.readdirSync(appsDir).filter(f => f.endsWith('.md'));
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(appsDir).filter(f => f.endsWith('.md'));
+  } catch (err) {
+    console.warn(`Failed to read apps directory for ${safeId}:`, err);
+    return [];
+  }
+
   const apps: GuidedAppInfo[] = [];
 
   for (const file of files) {
-    const filePath = path.join(appsDir, file);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const id = file.replace('.md', '');
+    try {
+      const filePath = path.join(appsDir, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const fallbackId = file.replace(/\.md$/, '');
 
-    const titleMatch = content.match(/\*\*Title\*\*:\s*(.+)$/m) || content.match(/^#\s+(.+)$/m);
-    const title = titleMatch ? titleMatch[1].trim() : id;
+      let frontMatter: Record<string, any> = {};
+      let bodyContent = content;
 
-    const timeMatch = content.match(/\*\*Estimated Time\*\*:\s*(.+)$/m);
-    const estimatedTime = timeMatch ? timeMatch[1].trim() : '5 minutes';
-
-    const goalMatch = content.match(/\*\*Goal\*\*:\s*(.+)$/m);
-    const goal = goalMatch ? goalMatch[1].trim() : '';
-
-    // Extract steps
-    const steps: GuidedAppStep[] = [];
-    const stepLines = content.split('\n');
-
-    for (let i = 0; i < stepLines.length; i++) {
-      const line = stepLines[i];
-      const numMatch = line.match(/^(\d+)\.\s+\*\*(.+?)\*\*:\s*(.+)$/);
-      if (numMatch) {
-        const stepNum = parseInt(numMatch[1], 10);
-        let coachPrompt = '';
-        if (i + 1 < stepLines.length) {
-          const nextLine = stepLines[i + 1];
-          const coachMatch = nextLine.match(/^\s*-\s*\*(?:Coach Question|Coach Prompt)\*:\s*"?([^"]+)"?/i);
-          if (coachMatch) {
-            coachPrompt = coachMatch[1].trim();
+      // Parse YAML front matter between --- lines
+      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+      if (fmMatch) {
+        try {
+          const parsedYaml = YAML.parse(fmMatch[1]);
+          if (parsedYaml && typeof parsedYaml === 'object') {
+            frontMatter = parsedYaml;
           }
+          bodyContent = fmMatch[2] || '';
+        } catch (yamlErr: any) {
+          console.warn(`Malformed YAML front matter in ${file}:`, yamlErr?.message || yamlErr);
         }
-        steps.push({
-          number: stepNum,
-          title: numMatch[2].trim(),
-          detail: numMatch[3].trim(),
-          coachPrompt: coachPrompt || undefined,
-        });
       } else {
-        const simpleMatch = line.match(/^(\d+)\.\s+(.+)$/);
-        if (simpleMatch && !line.includes('Goal:')) {
-          steps.push({
-            number: parseInt(simpleMatch[1], 10),
-            title: `Step ${simpleMatch[1]}`,
-            detail: simpleMatch[2].trim(),
-          });
+        console.warn(`Missing YAML front matter in ${file}; using defaults.`);
+      }
+
+      for (const key of Object.keys(frontMatter)) {
+        if (!KNOWN_FRONTMATTER_KEYS.has(key)) {
+          console.warn(`Unknown front matter key "${key}" in ${file}; ignoring.`);
         }
       }
-    }
 
-    apps.push({
-      id,
-      product: safeId,
-      title,
-      estimatedTime,
-      goal,
-      steps,
-      rawContent: content,
-    });
+      const id = typeof frontMatter.id === 'string' && frontMatter.id.trim() ? frontMatter.id.trim() : fallbackId;
+      const title =
+        typeof frontMatter.title === 'string' && frontMatter.title.trim()
+          ? frontMatter.title.trim()
+          : id;
+
+      const rawType = typeof frontMatter.type === 'string' ? frontMatter.type.trim().toLowerCase() : 'setup';
+      const type: RoutineType =
+        rawType === 'setup' || rawType === 'project' || rawType === 'checkup' || rawType === 'support'
+          ? rawType
+          : 'setup';
+
+      const order = typeof frontMatter.order === 'number' && !Number.isNaN(frontMatter.order)
+        ? frontMatter.order
+        : 99;
+
+      const estimatedTime =
+        typeof frontMatter.estimated_time === 'string' && frontMatter.estimated_time.trim()
+          ? frontMatter.estimated_time.trim()
+          : '10 minutes';
+
+      const risk =
+        typeof frontMatter.risk === 'string' && frontMatter.risk.trim()
+          ? frontMatter.risk.trim()
+          : 'low';
+
+      const requires = Array.isArray(frontMatter.requires)
+        ? frontMatter.requires.map((r: any) => String(r).trim()).filter(Boolean)
+        : [];
+
+      const recommended_after = Array.isArray(frontMatter.recommended_after)
+        ? frontMatter.recommended_after.map((r: any) => String(r).trim()).filter(Boolean)
+        : [];
+
+      const summary =
+        typeof frontMatter.summary === 'string' ? frontMatter.summary.trim() : '';
+      const goal =
+        typeof frontMatter.goal === 'string' ? frontMatter.goal.trim() : summary;
+
+      // Split body by ## headings
+      const steps: GuidedAppStep[] = [];
+      let contract: GuidedAppContract | undefined = undefined;
+      let ladder: GuidedAppLadderRung[] | undefined = undefined;
+      let finish: GuidedAppFinish | undefined = undefined;
+
+      const lines = bodyContent.split(/\r?\n/);
+      let currentSectionType: 'none' | 'step' | 'contract' | 'ladder' | 'finish' = 'none';
+      let currentStepBuilder: Partial<GuidedAppStep> | null = null;
+
+      const flushCurrentStep = () => {
+        if (currentStepBuilder && typeof currentStepBuilder.number === 'number') {
+          const coach = currentStepBuilder.coach || '';
+          const why = currentStepBuilder.why || '';
+          const doneWhen = currentStepBuilder.done_when || '';
+          steps.push({
+            number: currentStepBuilder.number,
+            title: currentStepBuilder.title || `Step ${currentStepBuilder.number}`,
+            coach,
+            done_when: doneWhen,
+            verify: currentStepBuilder.verify || 'user',
+            where: currentStepBuilder.where,
+            why,
+            if_stuck: currentStepBuilder.if_stuck,
+            safety: currentStepBuilder.safety,
+            area: currentStepBuilder.area,
+            rating: currentStepBuilder.rating,
+            coachPrompt: coach,
+            detail: why || doneWhen || coach,
+          });
+        }
+        currentStepBuilder = null;
+      };
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        const headingMatch = line.match(/^##\s+(.+)$/);
+        if (headingMatch) {
+          flushCurrentStep();
+          const headingText = headingMatch[1].trim();
+
+          const stepHeadingMatch = headingText.match(/^Step\s+(\d+)\s*:\s*(.+)$/i);
+          if (stepHeadingMatch) {
+            currentSectionType = 'step';
+            currentStepBuilder = {
+              number: parseInt(stepHeadingMatch[1], 10),
+              title: stepHeadingMatch[2].trim(),
+              coach: '',
+              done_when: '',
+              verify: 'user',
+            };
+          } else if (/^Contract$/i.test(headingText)) {
+            currentSectionType = 'contract';
+            if (!contract) contract = {};
+          } else if (/^Ladder$/i.test(headingText)) {
+            currentSectionType = 'ladder';
+            if (!ladder) ladder = [];
+          } else if (/^Finish$/i.test(headingText)) {
+            currentSectionType = 'finish';
+            if (!finish) finish = {};
+          } else {
+            console.warn(`Unknown section "## ${headingText}" in ${file}; ignoring.`);
+            currentSectionType = 'none';
+          }
+          continue;
+        }
+
+        if (!line.startsWith('-')) continue;
+        const bulletBody = line.replace(/^-\s*/, '').trim();
+
+        if (currentSectionType === 'step' && currentStepBuilder) {
+          const kvMatch = bulletBody.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/);
+          if (!kvMatch) {
+            console.warn(`Malformed step bullet "${line}" in ${file}; ignoring.`);
+            continue;
+          }
+          const key = kvMatch[1].trim();
+          const rawVal = kvMatch[2].trim();
+
+          if (!KNOWN_STEP_KEYS.has(key)) {
+            console.warn(`Unknown step key "${key}" in ${file}; ignoring.`);
+            continue;
+          }
+
+          if (key === 'coach') {
+            currentStepBuilder.coach = stripSurroundingQuotes(rawVal);
+          } else if (key === 'done_when') {
+            currentStepBuilder.done_when = rawVal;
+          } else if (key === 'verify') {
+            const v = rawVal.toLowerCase();
+            if (v === 'user' || v === 'screen' || v === 'either') {
+              currentStepBuilder.verify = v;
+            } else {
+              console.warn(`Unknown verify value "${rawVal}" in ${file}; defaulting to "user".`);
+              currentStepBuilder.verify = 'user';
+            }
+          } else if (key === 'where') {
+            currentStepBuilder.where = rawVal;
+          } else if (key === 'why') {
+            currentStepBuilder.why = rawVal;
+          } else if (key === 'if_stuck') {
+            currentStepBuilder.if_stuck = rawVal;
+          } else if (key === 'safety') {
+            currentStepBuilder.safety = rawVal;
+          } else if (key === 'area') {
+            currentStepBuilder.area = rawVal;
+          } else if (key === 'rating') {
+            currentStepBuilder.rating = rawVal;
+          }
+        } else if (currentSectionType === 'contract' && contract) {
+          const kvMatch = bulletBody.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/);
+          if (!kvMatch) {
+            console.warn(`Malformed Contract bullet "${line}" in ${file}; ignoring.`);
+            continue;
+          }
+          const key = kvMatch[1].trim();
+          const val = kvMatch[2].trim();
+          if (!KNOWN_CONTRACT_KEYS.has(key)) {
+            console.warn(`Unknown Contract key "${key}" in ${file}; ignoring.`);
+            continue;
+          }
+          (contract as Record<string, string>)[key] = val;
+        } else if (currentSectionType === 'ladder' && ladder) {
+          // Format: "- 0 Watch: text" -> { rung: 0, name: "Watch", text }
+          const ladderMatch = bulletBody.match(/^(\d+)\s+([^:]+):\s*(.+)$/);
+          if (!ladderMatch) {
+            console.warn(`Malformed Ladder bullet "${line}" in ${file}; ignoring.`);
+            continue;
+          }
+          ladder.push({
+            rung: parseInt(ladderMatch[1], 10),
+            name: ladderMatch[2].trim(),
+            text: ladderMatch[3].trim(),
+          });
+        } else if (currentSectionType === 'finish' && finish) {
+          const kvMatch = bulletBody.match(/^([a-zA-Z0-9_]+)\s*:\s*(.*)$/);
+          if (!kvMatch) {
+            console.warn(`Malformed Finish bullet "${line}" in ${file}; ignoring.`);
+            continue;
+          }
+          const key = kvMatch[1].trim();
+          const val = kvMatch[2].trim();
+          if (!KNOWN_FINISH_KEYS.has(key)) {
+            console.warn(`Unknown Finish key "${key}" in ${file}; ignoring.`);
+            continue;
+          }
+          (finish as Record<string, string>)[key] = val;
+        }
+      }
+
+      flushCurrentStep();
+
+      apps.push({
+        id,
+        product: safeId,
+        title,
+        type,
+        order,
+        estimated_time: estimatedTime,
+        estimatedTime,
+        risk,
+        requires,
+        recommended_after,
+        summary,
+        goal,
+        steps,
+        contract,
+        ladder,
+        finish,
+        rawContent: content,
+      });
+    } catch (fileErr: any) {
+      console.warn(`Failed to parse routine file ${file}:`, fileErr?.message || fileErr);
+    }
   }
 
+  const typePriority: Record<RoutineType, number> = {
+    setup: 1,
+    project: 2,
+    checkup: 3,
+    support: 4,
+  };
+
+  apps.sort((a, b) => {
+    const tpA = typePriority[a.type] ?? 99;
+    const tpB = typePriority[b.type] ?? 99;
+    if (tpA !== tpB) return tpA - tpB;
+    return (a.order ?? 99) - (b.order ?? 99);
+  });
+
   return apps;
+}
+
+export function getToolsCatalog(): ToolsCatalog {
+  const catalogPath = path.join(rootDir, 'knowledge', 'tools-catalog.json');
+  try {
+    if (fs.existsSync(catalogPath)) {
+      const raw = fs.readFileSync(catalogPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          lastChecked: typeof parsed.lastChecked === 'string' ? parsed.lastChecked : '2026-10-21',
+          supportLevels:
+            parsed.supportLevels && typeof parsed.supportLevels === 'object'
+              ? parsed.supportLevels
+              : {},
+          categories: Array.isArray(parsed.categories) ? parsed.categories : [],
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to read tools-catalog.json:', err);
+  }
+  return {
+    lastChecked: '2026-10-21',
+    supportLevels: {},
+    categories: [],
+  };
+}
+
+export function findCatalogTool(idOrName: string): {
+  tool: CatalogToolItem;
+  category: CatalogCategory;
+} | null {
+  if (!idOrName || typeof idOrName !== 'string') return null;
+  const queryStr = idOrName.trim().toLowerCase();
+  if (!queryStr) return null;
+
+  const catalog = getToolsCatalog();
+  for (const cat of catalog.categories) {
+    for (const tool of cat.tools || []) {
+      if (
+        tool.id.toLowerCase() === queryStr ||
+        tool.name.toLowerCase() === queryStr ||
+        tool.name.toLowerCase().includes(queryStr)
+      ) {
+        return { tool, category: cat };
+      }
+    }
+  }
+  return null;
+}
+
+export function normalizeDeviceName(raw: string): string | null {
+  const v = String(raw || '').trim().toLowerCase();
+  if (!v) return null;
+  if (v === 'website' || v === 'web' || v === 'browser' || v === 'muse.ai' || v === 'computer') {
+    return 'Website';
+  }
+  if (v === 'iphone' || v === 'ios' || v === 'ipad') {
+    return 'iPhone';
+  }
+  if (v === 'android' || v === 'android phone') {
+    return 'Android';
+  }
+  if (v === 'mac app' || v === 'mac' || v === 'macos' || v === 'desktop app') {
+    return 'Mac app';
+  }
+  if (v === 'whatsapp') {
+    return 'WhatsApp';
+  }
+  return null;
+}
+
+export function formatToolsProfileSection(toolsProfile?: ToolsProfilePayload | null): string {
+  const catalog = getToolsCatalog();
+  const devices = Array.isArray(toolsProfile?.devices)
+    ? toolsProfile!.devices.filter(d => typeof d === 'string' && d.trim())
+    : [];
+  const tools = Array.isArray(toolsProfile?.tools) ? toolsProfile!.tools : [];
+  const other = typeof toolsProfile?.other === 'string' ? toolsProfile.other.trim() : '';
+
+  if (devices.length === 0 && tools.length === 0 && !other) {
+    return `User's Tools Profile ("Your tools"): Not filled in yet.`;
+  }
+
+  const lines: string[] = [`User's Tools Profile ("Your tools"):`];
+  if (devices.length > 0) {
+    lines.push(`- Devices: ${devices.join(', ')}`);
+  } else {
+    lines.push(`- Devices: Not specified yet`);
+  }
+
+  if (tools.length > 0) {
+    lines.push(`- Tools selected:`);
+    for (const item of tools) {
+      const matched = findCatalogTool(item.id);
+      const supportCode = matched?.tool.support || 'unknown';
+      const supportExplanation =
+        catalog.supportLevels[supportCode] || 'Not confirmed either way [UNKNOWN].';
+      const evidence = matched?.tool.evidence || 'UNKNOWN';
+      const notePart = matched?.tool.note ? ` | Note: ${matched.tool.note}` : '';
+      const sensitiveLabel = item.sensitive ? ', sensitive: true' : ', sensitive: false';
+      lines.push(
+        `  * ${matched?.tool.name || item.name || item.id} (id: "${item.id}", category: ${
+          matched?.category.id || item.category || 'other'
+        }, account: ${item.account || 'personal'}${sensitiveLabel}) -> support: "${supportCode}" (${supportExplanation}) [evidence: ${evidence}]${notePart}`
+      );
+    }
+  } else {
+    lines.push(`- Tools selected: None yet`);
+  }
+
+  if (other) {
+    lines.push(`- Other tools (unlisted): ${other.slice(0, 300)} (support: "unknown" [UNKNOWN])`);
+  }
+
+  return lines.join('\n');
+}
+
+export function formatUserProjectsSection(
+  product: string,
+  userProjects?: UserProjectPayload[] | null
+): string {
+  const activeProjects = (Array.isArray(userProjects) ? userProjects : []).filter(
+    p => p && typeof p.projectId === 'string' && p.projectId.trim() && p.status !== 'paused'
+  );
+
+  if (activeProjects.length === 0) {
+    return `User's Active Projects ("My projects"): None saved yet.`;
+  }
+
+  const guidedApps = getGuidedApps(product);
+  const lines: string[] = [`User's Active Projects ("My projects"):`];
+
+  for (const proj of activeProjects) {
+    const matchedApp = guidedApps.find(a => a.id === proj.projectId);
+    const title = proj.title?.trim() || matchedApp?.title || proj.projectId;
+    const rungNum = Number.isFinite(Number(proj.rung)) ? Math.max(0, Math.min(3, Math.round(Number(proj.rung)))) : 0;
+    const ladder = matchedApp?.ladder && matchedApp.ladder.length > 0 ? matchedApp.ladder : DEFAULT_LADDER_RUNGS;
+    const rungEntry = ladder.find(r => r.rung === rungNum) || DEFAULT_LADDER_RUNGS[rungNum] || DEFAULT_LADDER_RUNGS[0];
+    const goalSummary = (proj.contract?.goal || '').trim() || matchedApp?.summary || 'No goal recorded';
+    const doSummary = (proj.contract?.do || '').trim();
+    const doNotSummary = (proj.contract?.do_not || '').trim();
+    const oneLineSummary = [
+      `Goal: ${goalSummary}`,
+      doSummary ? `Do: ${doSummary}` : '',
+      doNotSummary ? `Do not: ${doNotSummary}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    lines.push(
+      `- Project "${title}" (project_id: "${proj.projectId}") | Current Rung: ${rungNum} (${rungEntry.name}: ${rungEntry.text}) | Contract summary: ${oneLineSummary}`
+    );
+  }
+
+  return lines.join('\n');
 }
 
 export function formatRoutineStateSection(product: string, routineState?: RoutineStatePayload | null): string {
@@ -211,14 +781,19 @@ export function formatRoutineStateSection(product: string, routineState?: Routin
 - Completed Steps: [${completedSteps.join(', ')}] (${completedSteps.length}/${matchedApp.steps.length} done)
 - Active Step Now: ${
     activeStepObj
-      ? `Step ${activeStepObj.number}: "${activeStepObj.title}" — ${activeStepObj.detail}${
-          activeStepObj.coachPrompt ? ` (Inquiry: "${activeStepObj.coachPrompt}")` : ''
+      ? `Step ${activeStepObj.number}: "${activeStepObj.title}"
+  - coach: "${activeStepObj.coach}"
+  - done_when: ${activeStepObj.done_when}
+  - verify: ${activeStepObj.verify}${activeStepObj.where ? `\n  - where: ${activeStepObj.where}` : ''}${
+          activeStepObj.why ? `\n  - why: ${activeStepObj.why}` : ''
+        }${activeStepObj.if_stuck ? `\n  - if_stuck: ${activeStepObj.if_stuck}` : ''}${
+          activeStepObj.safety ? `\n  - safety: ${activeStepObj.safety}` : ''
         }`
       : activeStepNum ?? 'All steps completed'
   }
-- Coaching Reminder: When the user answers or finishes Step ${activeStepNum ?? 1}, call update_routine_progress with app_id="${matchedApp.id}", completed_step=${activeStepNum ?? 1}${
-    hasNextStep ? `, next_step=${nextStepNum}` : ''
-  } and guide them through the next step.`;
+- Coaching Reminder: Only call confirm_step (with app_id="${matchedApp.id}", step=${activeStepNum ?? 1}, evidence="screen"|"user", note="...") when Step ${activeStepNum ?? 1}'s done_when is met.${
+    hasNextStep ? ` After confirming, ask Step ${nextStepNum}'s coach question.` : ''
+  }`;
 }
 
 function formatEarlierSessionMemorySection(
@@ -230,7 +805,13 @@ function formatEarlierSessionMemorySection(
 
   const parts: string[] = [];
 
-  // 1. Progress Summary
+  // 1. User's Tools Profile ("Your tools") with catalog support level & evidence
+  parts.push(formatToolsProfileSection(contextObj.toolsProfile));
+
+  // 2. User's Active Projects ("My projects")
+  parts.push(formatUserProjectsSection(product, contextObj.userProjects));
+
+  // 3. Progress Summary
   const ps = contextObj.progressSummary;
   if (typeof ps === 'string' && ps.trim()) {
     parts.push(`Progress Summary:\n${ps.trim().slice(0, 1500)}`);
@@ -259,7 +840,7 @@ function formatEarlierSessionMemorySection(
     }
   }
 
-  // 2. Active Session Notes
+  // 4. Active Session Notes
   if (Array.isArray(contextObj.sessionNotes) && contextObj.sessionNotes.length > 0) {
     const formattedNotes = contextObj.sessionNotes
       .filter(n => typeof n === 'string' && n.trim())
@@ -271,15 +852,15 @@ function formatEarlierSessionMemorySection(
     }
   }
 
-  // 3. Extra context string if provided
+  // 5. Extra context string if provided
   if (contextObj.extraContext && contextObj.extraContext.trim()) {
     parts.push(contextObj.extraContext.trim().slice(0, 2000));
   }
 
-  // 4. Current Routine State
+  // 6. Current Routine State
   parts.push(formatRoutineStateSection(product, contextObj.routineState));
 
-  // 5. Recent Conversation Transcript Turns (up to last 20 turns, used for session continuity / fresh voice reconnect)
+  // 7. Recent Conversation Transcript Turns (up to last 20 turns, used for session continuity / fresh voice reconnect)
   if (Array.isArray(contextObj.recentTranscript) && contextObj.recentTranscript.length > 0) {
     const formattedTurns = contextObj.recentTranscript
       .slice(-20)
@@ -303,10 +884,87 @@ function formatEarlierSessionMemorySection(
   return `\nWhat you know from earlier sessions (you wrote this; confirm with the user before relying on it, and trust their screen over it).\n${body}\n`;
 }
 
+function formatContractAndLadderLines(app: GuidedAppInfo): string {
+  const sections: string[] = [];
+  if (app.contract) {
+    const contractLines: string[] = [];
+    if (app.contract.goal) contractLines.push(`    - goal: ${app.contract.goal}`);
+    if (app.contract.do) contractLines.push(`    - do: ${app.contract.do}`);
+    if (app.contract.do_not) contractLines.push(`    - do_not: ${app.contract.do_not}`);
+    if (app.contract.ask_me_before) contractLines.push(`    - ask_me_before: ${app.contract.ask_me_before}`);
+    if (app.contract.report_back) contractLines.push(`    - report_back: ${app.contract.report_back}`);
+    if (app.contract.stop_if) contractLines.push(`    - stop_if: ${app.contract.stop_if}`);
+    if (contractLines.length > 0) {
+      sections.push(`  Contract:\n${contractLines.join('\n')}`);
+    }
+  }
+  if (app.ladder && app.ladder.length > 0) {
+    const ladderLines = app.ladder.map(r => `    - ${r.rung} ${r.name}: ${r.text}`);
+    sections.push(`  Ladder:\n${ladderLines.join('\n')}`);
+  }
+  return sections.length > 0 ? `\n${sections.join('\n')}` : '';
+}
+
+/**
+ * Formats the routine list for the system prompt:
+ * - Only includes full step details (title, coach, done_when, verify, where, etc.) for the routine that is currently active.
+ * - For all other routines, includes id, title, type, summary, step titles, and (for project routines) Contract and Ladder definitions.
+ */
+function formatRoutinesForSystemPrompt(
+  guidedApps: GuidedAppInfo[],
+  activeRoutineId?: string | null
+): string {
+  return guidedApps
+    .map(app => {
+      const isActive = Boolean(activeRoutineId && app.id === activeRoutineId);
+      const contractAndLadderBlock = formatContractAndLadderLines(app);
+
+      if (isActive) {
+        const stepLines = app.steps
+          .map(s => {
+            const parts = [
+              `  - Step ${s.number}: ${s.title}`,
+              `    - coach: "${s.coach}"`,
+              `    - done_when: ${s.done_when}`,
+              `    - verify: ${s.verify}`,
+            ];
+            if (s.where) parts.push(`    - where: ${s.where}`);
+            if (s.why) parts.push(`    - why: ${s.why}`);
+            if (s.if_stuck) parts.push(`    - if_stuck: ${s.if_stuck}`);
+            if (s.safety) parts.push(`    - safety: ${s.safety}`);
+            if (s.area) parts.push(`    - area: ${s.area}`);
+            if (s.rating) parts.push(`    - rating: ${s.rating}`);
+            return parts.join('\n');
+          })
+          .join('\n');
+
+        const finishLines: string[] = [];
+        if (app.finish) {
+          if (app.finish.summarize) finishLines.push(`    - summarize: ${app.finish.summarize}`);
+          if (app.finish.save_note) finishLines.push(`    - save_note: ${app.finish.save_note}`);
+          if (app.finish.save_contract) finishLines.push(`    - save_contract: ${app.finish.save_contract}`);
+          if (app.finish.save_scorecard) finishLines.push(`    - save_scorecard: ${app.finish.save_scorecard}`);
+          if (app.finish.next) finishLines.push(`    - next: ${app.finish.next}`);
+        }
+
+        return `* [ACTIVE ROUTINE] ID: "${app.id}" | Title: "${app.title}" | Type: ${app.type} (~${app.estimated_time})
+  Summary: ${app.summary}
+  Goal: ${app.goal}
+  Steps:
+${stepLines}${contractAndLadderBlock}${finishLines.length > 0 ? `\n  Finish:\n${finishLines.join('\n')}` : ''}`;
+      }
+
+      const stepTitles = app.steps.map(s => `${s.number}. ${s.title}`).join(', ');
+      return `* ID: "${app.id}" | Title: "${app.title}" | Type: ${app.type} | Summary: ${app.summary}
+  Step titles: ${stepTitles}${app.type === 'project' ? contractAndLadderBlock : ''}`;
+    })
+    .join('\n\n');
+}
+
 /**
  * Builds the system instruction injecting {{TODAY}}, the user's first name from the verified token,
- * the product display name from the registry, knowledge file content, step-by-step interactive guidance rules,
- * and earlier session memory + current routine state.
+ * the product display name from the registry, knowledge file content + Nic's playbook,
+ * step-by-step interactive guidance rules, and earlier session memory + current routine state.
  */
 export function buildSystemInstruction(
   userName: string = 'Friend',
@@ -320,21 +978,16 @@ export function buildSystemInstruction(
   const todayStr = new Date().toISOString().split('T')[0];
   const firstName = (userName || 'Friend').trim().split(/\s+/)[0] || 'Friend';
 
-  const workflowsDescription = guidedApps
-    .map(app => {
-      const stepList = app.steps
-        .map(
-          s =>
-            `  - Step ${s.number}: ${s.title} — ${s.detail}${
-              s.coachPrompt ? ` (Your Inquiry: "${s.coachPrompt}")` : ''
-            }`
-        )
-        .join('\n');
-      return `* Workflow ID: "${app.id}" | Title: "${app.title}" (~${app.estimatedTime})\n  Goal: ${app.goal}\n  Steps:\n${stepList}`;
-    })
-    .join('\n\n');
+  const contextObj: SystemInstructionContext =
+    typeof contextOrExtra === 'string' ? { extraContext: contextOrExtra } : contextOrExtra || {};
+  const activeRoutineId = contextObj.routineState?.activeRoutineId || null;
 
+  const workflowsDescription = formatRoutinesForSystemPrompt(guidedApps, activeRoutineId);
   const earlierSessionsSection = formatEarlierSessionMemorySection(product, contextOrExtra);
+
+  const playbookSection = knowledge.playbookContent
+    ? `\nNic's playbook (his recommendations, tagged [NIC]):\n${knowledge.playbookContent}\n`
+    : '';
 
   const template = `You are the guide on Nic's site. You help people get set up with and stay safe using consumer AI agents, starting with {{PRODUCT_NAME}}. Many of them are nervous, and they are right to be careful. Your job is to make them calmer and more capable, not to sell them anything.
 You are speaking with {{FIRST_NAME}}. Use their first name naturally and sparingly.
@@ -348,7 +1001,19 @@ How you work:
 4. Safety posture to teach and model: least access first. Read-only before send. No payment access at first. Use a separate, low-stakes account while learning. Review connected apps and standing permissions on a schedule. Keep a human approval step before anything that sends, buys, deletes, or shares. Explain the tradeoff, then let them choose.
 5. Never ask for, repeat, or read out passwords, API keys, card numbers, government IDs, or one-time codes. If one appears on their screen, tell them to hide or close it and do not mention its contents.
 6. You only guide. You never control their screen or accounts. You do not give legal, financial, or medical advice.
-7. Be honest about the gap between what the product's maker says and what is verifiably true. Your notes label each claim by source (stated by the product's maker, reported by others, or unverified). Keep those labels when you explain it.
+7. Your notes tag each claim: [SEEN] seen on a real screen, [DOC] Muse's own documentation, [SAID] the Muse agent said it, [WEB] third-party reporting, [INFERRED] a guess, [UNKNOWN] not observed, [NIC] Nic's recommendation. Never present [SAID], [INFERRED], or [UNKNOWN] as fact. When you use a [NIC] item, say 'Nic recommends…'. When the user's screen disagrees with your notes, trust the screen, say so, and save a note.
+8. If you don't know which device the user is on (web, iPhone, Android, Mac app, WhatsApp), ask before giving directions. Menus differ.
+9. Tools profile ("Your tools") rules:
+   - Recommend projects that fit the user's tools.
+   - For any tool marked work, remind the user to check their employer's policy before connecting it, and offer a report to Nic.
+   - For tools with support 'unknown', 'custom', or 'browser', explain the tradeoff plainly and don't promise it works.
+   - For tools marked sensitive, recommend read-only and Background sync set to Deny.
+   - When the user mentions a tool they use in chat (e.g., "I use Outlook for work") or names their device (such as in Getting Started step 1), call update_tools_profile to save it to their tools profile. After Getting Started finishes, offer to help them fill in or review "Your tools" next.
+10. Projects, task contracts, and the autonomy ladder:
+   - At the end of a project routine (when Finish includes save_contract), call save_task_contract({ project_id, goal, do, do_not, ask_me_before, report_back, stop_if, rung }) with the six fields pre-filled from the routine's Contract section, replacing {placeholders} with what the user said.
+   - When a user asks to move a project up a rung, check that the current rung has been working smoothly for about a week and that their last check-up has no red areas. Recommend, but let them decide.
+   - When a user asks to move a project up or down a rung, walk through what the new rung means using the routine's Ladder text and the playbook's ladder rules. Update the rung with save_task_contract only after the user confirms they've changed the matching settings in Muse.
+   - Never let a project with "purchases", "public posts", or "send to others" in its Do list go past rung 2. Explain why.
 
 Escalate to {{OWNER_NAME}} (call escalate_to_owner) when: you have failed to solve the same problem twice; the issue involves billing, account lockout, or a security incident; the person asks for a human; their situation needs judgment beyond setup (business or organization policy, sensitive data, regulated work); or you cannot verify something that matters. When you call escalate_to_owner, tell the user plainly: "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly."
 
@@ -363,22 +1028,15 @@ CRITICAL RULES FOR GUIDED ROUTINES:
    - The UI displays an interactive stepped progress card to the user so they can clearly see the roadmap and their progress.
    - DO NOT dump a numbered list or bulleted checklist of all the steps into your response. Giving the user a bunch of steps overwhelms them and defeats the purpose of guided coaching.
    - Facilitate the routine interactively, ONE STEP AT A TIME.
-2. Step-by-Step Flow:
-   - Introduce the routine in ONE warm, calming sentence.
-   - Ask the inquiry for Step 1. Stop and wait for the user's answer.
-   - When the user responds:
-     a) Acknowledge what they shared with warmth and empathy.
-     b) Provide your recommendation or reassurance. If screen sharing is on, observe their screen.
-     c) Call 'update_routine_progress' with the completed step number and next step number so the UI checklist checks it off and advances smoothly.
-     d) Ask the question or guidance for the next step.
-   - Continue one step at a time through the workflow.
+2. Step Confirmation Rules:
+   - Only call confirm_step when the step's done_when is met. If the step says verify: screen, ask to see the screen (request_screenshare) and confirm what you see. If the user declines screen sharing, you may accept their description and use evidence 'user'. Never confirm a step the user hasn't actually done. After confirming, ask the next step's coach question.
 3. When all steps in the routine are finished:
-   - Provide a calm, one-paragraph summary of active safeguards and accomplishments.
-   - Call 'save_session_note' with a concise record of the audit or task contract.
+   - Follow the routine's Finish instructions: provide a calm one-paragraph summary, call save_session_note with the key details, if Finish includes save_contract call save_task_contract with the final contract and current rung, and suggest the recommended next routine.
 
 Product Knowledge File ({{PRODUCT_NAME}}):
 Last checked date: ${knowledge.lastChecked} (${knowledge.daysOld} days ago, ${knowledge.isStale ? 'STALE (>14 days) - prompt screen share to verify steps' : 'FRESH'}).
 ${knowledge.content}
+${playbookSection}
 ${earlierSessionsSection}`;
 
   return template
@@ -389,3 +1047,4 @@ ${earlierSessionsSection}`;
     .replace(/{{PRODUCT_NAME}}/g, productDisplayName)
     .replace(/{{PRODUCT}}/g, productDisplayName);
 }
+

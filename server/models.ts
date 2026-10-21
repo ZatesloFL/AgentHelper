@@ -5,6 +5,8 @@ import {
   getGuidedApps,
   RoutineStatePayload,
   ProgressSummaryPayload,
+  ToolsProfilePayload,
+  UserProjectPayload,
 } from './knowledge.js';
 import { getProductById } from './products.js';
 import { toolDeclarations, executeServerTool } from './tools.js';
@@ -126,18 +128,13 @@ function is429Or503(err: any): boolean {
 
 function isThinkingRejectedError(err: any): boolean {
   if (is429Or503(err)) return false;
-  const status = Number(err?.status || err?.code || 0);
   const msg = String(err?.message || '').toLowerCase();
   return (
-    status === 400 ||
     msg.includes('thinking') ||
     msg.includes('thinkinglevel') ||
     msg.includes('thinking_level') ||
     msg.includes('thinkingconfig') ||
-    msg.includes('thinking_config') ||
-    msg.includes('not supported') ||
-    msg.includes('invalid argument') ||
-    msg.includes('unknown name')
+    msg.includes('thinking_config')
   );
 }
 
@@ -365,6 +362,8 @@ export async function handleTextChat(payload: {
   routineState?: RoutineStatePayload | null;
   progressSummary?: ProgressSummaryPayload | string | null;
   sessionNotes?: string[];
+  toolsProfile?: ToolsProfilePayload | null;
+  userProjects?: UserProjectPayload[] | null;
 }): Promise<{
   reply: string;
   toolInvocations?: Array<{ name: string; args: any; result: any }>;
@@ -377,12 +376,16 @@ export async function handleTextChat(payload: {
     routineState = null,
     progressSummary = null,
     sessionNotes = [],
+    toolsProfile = null,
+    userProjects = null,
   } = payload;
 
   const systemInstruction = buildSystemInstruction(userName, product, {
     progressSummary,
     sessionNotes,
     routineState,
+    toolsProfile,
+    userProjects,
   });
 
   // Input caps: at most the last 60 messages, each truncated to 4,000 characters
@@ -510,23 +513,33 @@ export async function handleTextChat(payload: {
   }
 
   if (!textReply.trim()) {
-    const updateTool = toolInvocations.find(t => t.name === 'update_routine_progress');
+    const updateTool = toolInvocations.find(
+      t => t.name === 'confirm_step' || t.name === 'update_routine_progress'
+    );
     const launchTool = toolInvocations.find(t => t.name === 'launch_app');
     const escalateTool = toolInvocations.find(t => t.name === 'escalate_to_owner');
+    const contractTool = toolInvocations.find(t => t.name === 'save_task_contract');
+    const toolsProfileTool = toolInvocations.find(t => t.name === 'update_tools_profile');
     const noteSavedSucceeded = toolInvocations.some(
       t => t.name === 'save_session_note' && t.result?.saved === true
     );
 
     if (escalateTool) {
       textReply = `I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly.`;
+    } else if (contractTool) {
+      const { title, rung, rungName, cappedAtRung2 } = contractTool.result || {};
+      textReply = cappedAtRung2
+        ? `I've prepared your task contract for ${title || 'your project'} below at Rung ${rung ?? 2} (${rungName || 'Act with approval'}). Because it involves purchases, public posts, or sending to others, it stays at Rung 2 so you approve each time. You can edit any line, save it to My projects, or copy it for Muse.`
+        : `I've prepared your task contract for ${title || 'your project'} below at Rung ${rung ?? 0} (${rungName || 'Watch'}). You can edit any line, save it to My projects, or copy it to paste into Muse.`;
     } else if (updateTool) {
-      const { app_id, completed_step, next_step } = updateTool.result || {};
+      const { app_id, completed_step, step, next_step } = updateTool.result || {};
+      const confirmedNum = step ?? completed_step ?? 1;
       const apps = getGuidedApps(product);
       const app = apps.find(a => a.id === app_id);
       if (next_step && app) {
         const nextStepObj = app.steps.find(s => s.number === next_step);
-        const nextInquiry = nextStepObj?.coachPrompt || nextStepObj?.detail || '';
-        textReply = `Great, Step ${completed_step} is confirmed! Let's move to Step ${next_step}: ${nextStepObj?.title || ''}.\n\n${nextInquiry}`;
+        const nextInquiry = nextStepObj?.coach || nextStepObj?.coachPrompt || nextStepObj?.detail || '';
+        textReply = `Great, Step ${confirmedNum} is confirmed! Let's move to Step ${next_step}: ${nextStepObj?.title || ''}.\n\n${nextInquiry}`;
       } else if (noteSavedSucceeded) {
         textReply = `All steps in this routine are now complete! I've saved your notes for this session.`;
       } else {
@@ -537,8 +550,10 @@ export async function handleTextChat(payload: {
       const apps = getGuidedApps(product);
       const app = apps.find(a => a.id === appId);
       const step1 = app?.steps[0];
-      const step1Inquiry = step1?.coachPrompt || step1?.detail || '';
+      const step1Inquiry = step1?.coach || step1?.coachPrompt || step1?.detail || '';
       textReply = `I've opened the roadmap for ${app?.title || 'your routine'}. Let's take it one step at a time:\n\n${step1Inquiry}`;
+    } else if (toolsProfileTool) {
+      textReply = `I've updated your tools profile with that information.`;
     } else if (toolInvocations.some(t => t.name === 'get_booking_link')) {
       textReply = `Here is Nic's direct booking link below.`;
     } else if (toolInvocations.some(t => t.name === 'request_screenshare')) {
@@ -567,82 +582,12 @@ export interface SummarizeResponse {
   summary: string;
 }
 
-function buildLocalFallbackSummary(
-  product: string,
-  productName: string,
-  rawTranscript: Array<{ role: string; text: string }>,
-  routineState?: RoutineStatePayload | null,
-  previousSummary?: ProgressSummaryPayload | string | null
-): SummarizeResponse {
-  const prevObj: ProgressSummaryPayload =
-    previousSummary && typeof previousSummary === 'object' ? previousSummary : {};
-
-  const done = Array.isArray(prevObj.done) ? [...prevObj.done] : [];
-  const inProgress = Array.isArray(prevObj.inProgress) ? [...prevObj.inProgress] : [];
-  const boundariesAndPreferences = Array.isArray(prevObj.boundariesAndPreferences)
-    ? [...prevObj.boundariesAndPreferences]
-    : [];
-  const openQuestions = Array.isArray(prevObj.openQuestions) ? [...prevObj.openQuestions] : [];
-  let suggestedNextStep =
-    prevObj.suggestedNextStep || `Continue exploring ${productName} at your own pace.`;
-
-  if (routineState?.activeRoutineId) {
-    const apps = getGuidedApps(product);
-    const app = apps.find(a => a.id === routineState.activeRoutineId);
-    const routineTitle = app?.title || routineState.activeRoutineId;
-    const completedCount = routineState.completedSteps?.length || 0;
-    const totalCount = app?.steps?.length || 0;
-
-    if (totalCount > 0 && completedCount >= totalCount) {
-      const doneEntry = `Completed the "${routineTitle}" routine`;
-      if (!done.includes(doneEntry)) done.push(doneEntry);
-      suggestedNextStep = `Choose your next workflow or review your settings in ${productName}.`;
-    } else if (routineState.activeStep) {
-      const stepObj = app?.steps?.find(s => s.number === routineState.activeStep);
-      const progEntry = `${routineTitle} (Step ${routineState.activeStep}${
-        stepObj ? `: ${stepObj.title}` : ''
-      })`;
-      if (!inProgress.includes(progEntry)) inProgress.unshift(progEntry);
-      suggestedNextStep = `Continue with Step ${routineState.activeStep} of "${routineTitle}".`;
-    }
-  }
-
-  const userTurns = rawTranscript.filter(m => m.role === 'user' && m.text?.trim());
-  const lastUserTurn =
-    userTurns.length > 0 ? userTurns[userTurns.length - 1].text.trim().slice(0, 200) : '';
-
-  let summaryText = '';
-  if (done.length > 0 && inProgress.length > 0) {
-    summaryText = `You completed ${done[done.length - 1]} and are currently working on ${inProgress[0]}.`;
-  } else if (done.length > 0) {
-    summaryText = `You completed ${done[done.length - 1]} in ${productName}.`;
-  } else if (inProgress.length > 0) {
-    summaryText = `You are currently working on ${inProgress[0]} in ${productName}.`;
-  } else if (lastUserTurn) {
-    summaryText = `You were discussing ${productName} ("${lastUserTurn}"). Next time, we can pick up right where you left off.`;
-  } else if (typeof previousSummary === 'object' && previousSummary?.summary) {
-    summaryText = previousSummary.summary;
-  } else if (typeof previousSummary === 'string' && previousSummary.trim()) {
-    summaryText = previousSummary.trim();
-  } else {
-    summaryText = `You started exploring ${productName}. Whenever you are ready, we can pick up right where we left off.`;
-  }
-
-  return {
-    done: done.slice(0, 10),
-    inProgress: inProgress.slice(0, 10),
-    boundariesAndPreferences: boundariesAndPreferences.slice(0, 10),
-    openQuestions: openQuestions.slice(0, 10),
-    suggestedNextStep: suggestedNextStep.slice(0, 400),
-    summary: summaryText.slice(0, 1200),
-  };
-}
-
 /**
  * Generates a structured progress summary using TEXT_MODEL, thinkingFor("summary") = high,
  * and a JSON responseSchema.
  * Only includes things the user actually said or confirmed.
  * Never includes passwords, codes, card numbers, or anything seen on screen that looks sensitive.
+ * Throws if the model call fails or returns invalid JSON so the route returns HTTP 503.
  */
 export async function handleSummarize(payload: {
   userName: string;
@@ -681,18 +626,6 @@ export async function handleSummarize(payload: {
     })
     .join('\n');
 
-  const fallbackResult = buildLocalFallbackSummary(
-    product,
-    productName,
-    rawTranscript,
-    routineState,
-    previousSummary
-  );
-
-  if (!formattedTranscript.trim() && !previousSummary) {
-    return fallbackResult;
-  }
-
   const prevSummaryStr =
     typeof previousSummary === 'string'
       ? previousSummary
@@ -708,6 +641,7 @@ STRICT PRIVACY & ACCURACY RULES:
 1. Only include things the user actually said or confirmed in the conversation or routine progress. Do NOT invent or assume steps they did not confirm.
 2. NEVER include passwords, one-time codes, API keys, card numbers, government IDs, private URLs/tokens, or anything seen on screen that looks sensitive.
 3. Write "summary" directly to the user in second person ("you"), in a warm, plain, unhurried tone, and strictly <= 1,200 characters.
+4. Track only setup progress, decisions, boundaries, preferences, and open questions. Ignore small talk, greetings, and technical checks of this app (for example audio or microphone tests).
 
 Previous Progress Summary:
 ${prevSummaryStr}
@@ -760,46 +694,48 @@ ${formattedTranscript || '(No new messages)'}`;
     ],
   };
 
-  try {
-    const { response } = await generateTextWithRetryAndFallback({
-      task: 'summary',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema,
-        temperature: 0.3,
-      },
-    });
+  const { response } = await generateTextWithRetryAndFallback({
+    task: 'summary',
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema,
+      temperature: 0.3,
+    },
+  });
 
-    const rawText = (response.text || '').trim();
-    if (rawText) {
-      const parsed = JSON.parse(rawText);
-      return {
-        done: Array.isArray(parsed.done) ? parsed.done.map((s: any) => String(s)) : fallbackResult.done,
-        inProgress: Array.isArray(parsed.inProgress)
-          ? parsed.inProgress.map((s: any) => String(s))
-          : fallbackResult.inProgress,
-        boundariesAndPreferences: Array.isArray(parsed.boundariesAndPreferences)
-          ? parsed.boundariesAndPreferences.map((s: any) => String(s))
-          : fallbackResult.boundariesAndPreferences,
-        openQuestions: Array.isArray(parsed.openQuestions)
-          ? parsed.openQuestions.map((s: any) => String(s))
-          : fallbackResult.openQuestions,
-        suggestedNextStep:
-          typeof parsed.suggestedNextStep === 'string' && parsed.suggestedNextStep.trim()
-            ? parsed.suggestedNextStep.slice(0, 400)
-            : fallbackResult.suggestedNextStep,
-        summary:
-          typeof parsed.summary === 'string' && parsed.summary.trim()
-            ? parsed.summary.trim().slice(0, 1200)
-            : fallbackResult.summary,
-      };
-    }
-  } catch {
-    // Gracefully return deterministic local summary when models are unavailable
+  const rawText = (response.text || '').trim();
+  if (!rawText) {
+    throw new Error('Model returned an empty summary response');
   }
 
-  return fallbackResult;
+  const parsed = JSON.parse(rawText);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    typeof parsed.summary !== 'string' ||
+    !parsed.summary.trim()
+  ) {
+    throw new Error('Model returned invalid summary JSON');
+  }
+
+  return {
+    done: Array.isArray(parsed.done) ? parsed.done.map((s: any) => String(s)) : [],
+    inProgress: Array.isArray(parsed.inProgress)
+      ? parsed.inProgress.map((s: any) => String(s))
+      : [],
+    boundariesAndPreferences: Array.isArray(parsed.boundariesAndPreferences)
+      ? parsed.boundariesAndPreferences.map((s: any) => String(s))
+      : [],
+    openQuestions: Array.isArray(parsed.openQuestions)
+      ? parsed.openQuestions.map((s: any) => String(s))
+      : [],
+    suggestedNextStep:
+      typeof parsed.suggestedNextStep === 'string' && parsed.suggestedNextStep.trim()
+        ? parsed.suggestedNextStep.slice(0, 400)
+        : '',
+    summary: parsed.summary.trim().slice(0, 1200),
+  };
 }
 
 export interface ReportDraftResponse {

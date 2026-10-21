@@ -5,6 +5,8 @@ import { config } from './config.js';
 import {
   buildSystemInstruction,
   formatRoutineStateSection,
+  formatToolsProfileSection,
+  formatUserProjectsSection,
   SystemInstructionContext,
 } from './knowledge.js';
 import { toolDeclarations, executeServerTool } from './tools.js';
@@ -56,6 +58,53 @@ function mergeContextObject(
       };
     }
 
+    if (contextObj.toolsProfile && typeof contextObj.toolsProfile === 'object') {
+      target.toolsProfile = {
+        devices: Array.isArray(contextObj.toolsProfile.devices)
+          ? contextObj.toolsProfile.devices.map(String)
+          : [],
+        tools: Array.isArray(contextObj.toolsProfile.tools)
+          ? contextObj.toolsProfile.tools.map((t: any) => ({
+              id: String(t?.id || ''),
+              name: String(t?.name || t?.id || ''),
+              category: String(t?.category || 'other'),
+              account: t?.account === 'work' ? ('work' as const) : ('personal' as const),
+              sensitive: Boolean(t?.sensitive),
+            }))
+          : [],
+        other:
+          typeof contextObj.toolsProfile.other === 'string'
+            ? contextObj.toolsProfile.other.slice(0, 300)
+            : '',
+      };
+    }
+
+    if (Array.isArray(contextObj.userProjects)) {
+      target.userProjects = contextObj.userProjects
+        .filter((p: any) => p && typeof p.projectId === 'string')
+        .slice(0, 20)
+        .map((p: any) => ({
+          projectId: String(p.projectId).trim(),
+          title: typeof p.title === 'string' ? p.title.slice(0, 200) : undefined,
+          rung: Number.isFinite(Number(p.rung)) ? Math.max(0, Math.min(3, Math.round(Number(p.rung)))) : 0,
+          status: p.status === 'paused' ? ('paused' as const) : ('active' as const),
+          contract: {
+            goal: typeof p.contract?.goal === 'string' ? p.contract.goal.slice(0, 1000) : '',
+            do: typeof p.contract?.do === 'string' ? p.contract.do.slice(0, 1500) : '',
+            do_not: typeof p.contract?.do_not === 'string' ? p.contract.do_not.slice(0, 1500) : '',
+            ask_me_before:
+              typeof p.contract?.ask_me_before === 'string'
+                ? p.contract.ask_me_before.slice(0, 1000)
+                : '',
+            report_back:
+              typeof p.contract?.report_back === 'string'
+                ? p.contract.report_back.slice(0, 1000)
+                : '',
+            stop_if: typeof p.contract?.stop_if === 'string' ? p.contract.stop_if.slice(0, 1000) : '',
+          },
+        }));
+    }
+
     if (Array.isArray(contextObj.recentTranscript)) {
       target.recentTranscript = contextObj.recentTranscript
         .slice(-20)
@@ -79,6 +128,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
     let verifiedUser: VerifiedUser | null = null;
     let product = 'muse';
     let resumptionHandle: string | undefined = undefined;
+    const reconnectTimestamps: number[] = [];
     const latestContext: SystemInstructionContext = {};
 
     const sendToClient = (payload: Record<string, any>) => {
@@ -141,6 +191,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         progressSummary: latestContext.progressSummary,
         sessionNotes: latestContext.sessionNotes,
         routineState: latestContext.routineState,
+        toolsProfile: latestContext.toolsProfile,
+        userProjects: latestContext.userProjects,
         extraContext: latestContext.extraContext,
         recentTranscript: includeTranscriptInSystemPrompt ? latestContext.recentTranscript : undefined,
       };
@@ -152,6 +204,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
       );
 
       let thisSessionRef: any = null;
+      const openedWithHandle = Boolean(handleToUse);
+      let sessionOpenedAt = Date.now();
 
       const createdSession = await ai.live.connect({
         model: config.liveModel,
@@ -267,6 +321,10 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           onclose: () => {
             if (isClosed || clientWs.readyState !== WebSocket.OPEN) return;
             if (thisSessionRef && session && thisSessionRef !== session) return;
+            // If a session opened with a resumptionHandle closes within 10 seconds of opening, clear resumptionHandle before reconnecting
+            if (openedWithHandle && Date.now() - sessionOpenedAt < 10_000) {
+              resumptionHandle = undefined;
+            }
             triggerBackgroundReconnect();
           },
           onerror: (err: any) => {
@@ -275,12 +333,42 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         },
       });
 
+      sessionOpenedAt = Date.now();
       thisSessionRef = createdSession;
       return createdSession;
     };
 
+    const giveUpReconnect = (message: string) => {
+      isReconnecting = false;
+      sendToClient({
+        type: 'error',
+        code: 'reconnect_failed',
+        message,
+      });
+      cleanupSession();
+      try {
+        clientWs.close();
+      } catch (_) {}
+    };
+
     const triggerBackgroundReconnect = async () => {
       if (isClosed || isReconnecting || clientWs.readyState !== WebSocket.OPEN) return;
+
+      // Track total reconnects per client socket and give up after 5 total reconnects within 10 minutes
+      const now = Date.now();
+      const tenMinutesAgo = now - 10 * 60 * 1000;
+      while (reconnectTimestamps.length > 0 && reconnectTimestamps[0] <= tenMinutesAgo) {
+        reconnectTimestamps.shift();
+      }
+
+      if (reconnectTimestamps.length >= 5) {
+        giveUpReconnect(
+          "Voice connection dropped too many times in the last 10 minutes. You can keep typing below, or press Start Voice Chat to try again."
+        );
+        return;
+      }
+
+      reconnectTimestamps.push(now);
       isReconnecting = true;
 
       // Detach and close the previous Gemini session without closing the browser socket
@@ -346,17 +434,9 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
       }
 
       // Gave up after 3 failed attempts in a row
-      isReconnecting = false;
-      sendToClient({
-        type: 'error',
-        code: 'reconnect_failed',
-        message:
-          "Voice connection dropped and couldn't reconnect after 3 tries. You can keep typing below, or press Start Voice Chat to try again.",
-      });
-      cleanupSession();
-      try {
-        clientWs.close();
-      } catch (_) {}
+      giveUpReconnect(
+        "Voice connection dropped and couldn't reconnect after 3 tries. You can keep typing below, or press Start Voice Chat to try again."
+      );
     };
 
     clientWs.on('message', async (rawData) => {
@@ -457,16 +537,22 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
       // Context refresh from client (accepts { type: "context", ... } or { type: "context_update", ... })
       if (parsed.type === 'context' || parsed.type === 'context_update') {
         mergeContextObject(latestContext, parsed.context || parsed);
-        if (parsed.routineState && session && !isReconnecting) {
+        if (
+          (parsed.routineState || parsed.toolsProfileUpdated || parsed.userProjectsUpdated) &&
+          session &&
+          !isReconnecting
+        ) {
           try {
             const routineBlock = formatRoutineStateSection(product, latestContext.routineState);
+            const toolsBlock = formatToolsProfileSection(latestContext.toolsProfile);
+            const projectsBlock = formatUserProjectsSection(product, latestContext.userProjects);
             session.sendClientContent({
               turns: [
                 {
                   role: 'user',
                   parts: [
                     {
-                      text: `[System Context Update — Current Routine State]\n${routineBlock}`,
+                      text: `[System Context Update]\n${routineBlock}\n\n${toolsBlock}\n\n${projectsBlock}`,
                     },
                   ],
                 },

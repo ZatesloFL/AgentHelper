@@ -34,9 +34,15 @@ interface AdminData {
     lastChecked: string;
     daysOld: number;
     isStale: boolean;
-    metaStatementsCount: number;
-    reportedStatementsCount: number;
-    unverifiedStatementsCount: number;
+    tagCounts?: {
+      SEEN: number;
+      DOC: number;
+      SAID: number;
+      WEB: number;
+      INFERRED: number;
+      UNKNOWN: number;
+      NIC: number;
+    };
   }>;
   config: {
     liveModel: string;
@@ -376,12 +382,20 @@ export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
                   Checked: {kf.lastChecked}
                 </div>
 
-                <div className="flex items-center gap-2 text-[10px] text-[#57534E] border-t border-[#E6DFD3] pt-2">
-                  <span>[Meta]: {kf.metaStatementsCount}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-[#57534E] font-mono border-t border-[#E6DFD3] pt-2">
+                  <span>[SEEN]: {kf.tagCounts?.SEEN ?? 0}</span>
                   <span>·</span>
-                  <span>[Reported]: {kf.reportedStatementsCount}</span>
+                  <span>[DOC]: {kf.tagCounts?.DOC ?? 0}</span>
                   <span>·</span>
-                  <span>[Unverified]: {kf.unverifiedStatementsCount}</span>
+                  <span>[SAID]: {kf.tagCounts?.SAID ?? 0}</span>
+                  <span>·</span>
+                  <span>[WEB]: {kf.tagCounts?.WEB ?? 0}</span>
+                  <span>·</span>
+                  <span>[INFERRED]: {kf.tagCounts?.INFERRED ?? 0}</span>
+                  <span>·</span>
+                  <span>[UNKNOWN]: {kf.tagCounts?.UNKNOWN ?? 0}</span>
+                  <span>·</span>
+                  <span>[NIC]: {kf.tagCounts?.NIC ?? 0}</span>
                 </div>
               </div>
             ))}

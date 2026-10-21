@@ -1,14 +1,16 @@
 import React from 'react';
 import { AuthUser } from '../lib/firebase.js';
-import { ShieldCheck, UserCheck, Calendar, BookOpen, Layers } from 'lucide-react';
+import { ShieldCheck, Calendar, BookOpen, Layers, Wrench } from 'lucide-react';
 
 interface TopNavProps {
   user: AuthUser | null;
+  isAdmin?: boolean;
   currentProduct: string;
   onSelectProduct: (product: string) => void;
   availableProducts: Array<{ id: string; name?: string; title?: string }>;
   onOpenKnowledge: () => void;
   onOpenApps: () => void;
+  onOpenTools: () => void;
   onOpenNotes: () => void;
   onOpenEscalation: () => void;
   onOpenAdmin: () => void;
@@ -18,11 +20,13 @@ interface TopNavProps {
 
 export const TopNav: React.FC<TopNavProps> = ({
   user,
+  isAdmin = false,
   currentProduct,
   onSelectProduct,
   availableProducts,
   onOpenKnowledge,
   onOpenApps,
+  onOpenTools,
   onOpenNotes,
   onOpenEscalation,
   onOpenAdmin,
@@ -78,6 +82,14 @@ export const TopNav: React.FC<TopNavProps> = ({
         </button>
 
         <button
+          onClick={onOpenTools}
+          className="flex items-center gap-1.5 hover:text-[#1C1917] transition-colors whitespace-nowrap shrink-0 text-left"
+        >
+          <Wrench className="w-3.5 h-3.5" />
+          <span>Your tools</span>
+        </button>
+
+        <button
           onClick={onOpenNotes}
           className="flex items-center gap-1.5 hover:text-[#1C1917] transition-colors whitespace-nowrap shrink-0 text-left"
         >
@@ -85,12 +97,14 @@ export const TopNav: React.FC<TopNavProps> = ({
           <span>Session Notes</span>
         </button>
 
-        <button
-          onClick={onOpenAdmin}
-          className="hover:text-[#1C1917] transition-colors whitespace-nowrap shrink-0 text-xs text-[#78716C]"
-        >
-          Admin Console
-        </button>
+        {isAdmin && (
+          <button
+            onClick={onOpenAdmin}
+            className="hover:text-[#1C1917] transition-colors whitespace-nowrap shrink-0 text-xs text-[#78716C]"
+          >
+            Admin Console
+          </button>
+        )}
       </nav>
 
       {/* Zone 3: 1 primary action */}

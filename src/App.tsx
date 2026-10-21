@@ -12,11 +12,27 @@ import {
   saveConversation,
   getRecentProductConversation,
   listUserConversations,
+  getUserConversation,
   deleteUserConversation,
   getUserProgressSummary,
   saveUserProgressSummary,
   deleteUserProgressSummary,
+  getUserRoutinesProgress,
+  saveUserRoutineProgress,
+  RoutineProgressDoc,
+  getUserToolsProfile,
+  saveUserToolsProfile,
+  ToolsProfileDoc,
+  UserToolEntry,
+  getUserProjects,
+  saveUserProjectContract,
+  updateUserProjectStatus,
+  deleteUserProject,
+  UserProjectDoc,
+  TaskContractFields,
+  StoredContractCard,
   deleteAllUserHistory,
+  clearUserLocalStorage,
   ProgressSummaryDoc,
   StoredConversation,
 } from './lib/firebase.js';
@@ -31,9 +47,11 @@ import { ScreenShareBanner } from './components/ScreenShareBanner.js';
 import { ScreenShareConsentModal } from './components/ScreenShareConsentModal.js';
 import { GuidedAppCard } from './components/GuidedAppCard.js';
 import { ReportForNicCard } from './components/ReportForNicCard.js';
+import { TaskContractCard } from './components/TaskContractCard.js';
 import { CalendarEscalationModal } from './components/CalendarEscalationModal.js';
 import { NotesDrawer } from './components/NotesDrawer.js';
 import { KnowledgeModal } from './components/KnowledgeModal.js';
+import { ToolsProfileModal, ToolsCatalogData } from './components/ToolsProfileModal.js';
 import { AdminView } from './components/AdminView.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
@@ -46,9 +64,18 @@ import {
   AlertCircle,
   LogOut,
   RotateCcw,
+  Wrench,
+  MoreHorizontal,
+  FileText,
+  ArrowUp,
+  ArrowDown,
+  Pause,
+  Play,
+  Trash2,
 } from 'lucide-react';
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
 function createConversationId(): string {
   return `conv-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -56,26 +83,17 @@ function createConversationId(): string {
 
 function buildGreetingMessage(progress: ProgressSummaryDoc | null, productName: string): string {
   if (progress) {
-    const doneList = Array.isArray(progress.done) ? progress.done.filter(Boolean) : [];
-    const inProgList = Array.isArray(progress.inProgress) ? progress.inProgress.filter(Boolean) : [];
-    const lastDone = doneList.length > 0 ? doneList[doneList.length - 1] : '';
-    const firstInProg = inProgList.length > 0 ? inProgList[0] : '';
+    const summaryText = progress.summary ? progress.summary.trim() : '';
+    const nextStepText = progress.suggestedNextStep ? progress.suggestedNextStep.trim() : '';
 
-    if (lastDone && firstInProg) {
-      return `Welcome back. Last time you finished ${lastDone} and were working on ${firstInProg}. Want to pick up there, or start somewhere else?`;
+    if (summaryText && nextStepText) {
+      return `Welcome back. ${summaryText}\n\nSuggested next step: ${nextStepText} Want to pick up there, or start somewhere else?`;
     }
-    if (lastDone) {
-      return `Welcome back. Last time you finished ${lastDone}. Want to pick up from there, or start somewhere else?`;
+    if (summaryText) {
+      return `Welcome back. ${summaryText} Want to pick up there, or start somewhere else?`;
     }
-    if (firstInProg) {
-      return `Welcome back. Last time you were working on ${firstInProg}. Want to pick up there, or start somewhere else?`;
-    }
-    if (progress.summary && progress.summary.trim()) {
-      const firstSentenceMatch = progress.summary.trim().match(/^[^.!?]+[.!?]/);
-      const firstSentence = firstSentenceMatch
-        ? firstSentenceMatch[0].trim()
-        : progress.summary.trim().split(/\r?\n/)[0].slice(0, 140).trim();
-      return `Welcome back — ${firstSentence} Want to pick up there, or start somewhere else?`;
+    if (nextStepText) {
+      return `Welcome back. Suggested next step: ${nextStepText} Want to pick up there, or start somewhere else?`;
     }
   }
 
@@ -85,6 +103,7 @@ function buildGreetingMessage(progress: ProgressSummaryDoc | null, productName: 
 export default function App() {
   // Navigation / View State
   const [isAdminView, setIsAdminView] = useState<boolean>(false);
+  const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
   // User & Consent State
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -101,6 +120,11 @@ export default function App() {
   const [showKnowledgeModal, setShowKnowledgeModal] = useState<boolean>(false);
   const [guidedApps, setGuidedApps] = useState<any[]>([]);
   const [showAppsSidebar, setShowAppsSidebar] = useState<boolean>(true);
+
+  // Tools Profile & Catalog State
+  const [toolsCatalog, setToolsCatalog] = useState<ToolsCatalogData | null>(null);
+  const [toolsProfile, setToolsProfile] = useState<ToolsProfileDoc | null>(null);
+  const [showToolsModal, setShowToolsModal] = useState<boolean>(false);
 
   // Health, Handoff & Booking Config from Server
   const [liveAvailable, setLiveAvailable] = useState<boolean>(true);
@@ -132,9 +156,12 @@ export default function App() {
     onDeny: () => {},
   });
 
-  // Session Notes, Progress Summary, Past Conversations & Escalation
+  // Session Notes, Progress Summary, Routine Progress, User Projects, Past Conversations & Escalation
   const [sessionNotes, setSessionNotes] = useState<SessionNote[]>([]);
   const [progressSummary, setProgressSummary] = useState<ProgressSummaryDoc | null>(null);
+  const [routineProgressMap, setRoutineProgressMap] = useState<Record<string, RoutineProgressDoc>>({});
+  const [userProjectsMap, setUserProjectsMap] = useState<Record<string, UserProjectDoc>>({});
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
   const [pastConversations, setPastConversations] = useState<StoredConversation[]>([]);
   const [showNotesDrawer, setShowNotesDrawer] = useState<boolean>(false);
   const [showEscalationModal, setShowEscalationModal] = useState<boolean>(false);
@@ -149,9 +176,13 @@ export default function App() {
   // Refs for one-time Live Client & conversation persistence
   const clientRef = useRef<CalmGuideLiveClient | null>(null);
   const userRef = useRef<AuthUser | null>(null);
+  const lastSignedInUidRef = useRef<string | null>(null);
   const currentProductRef = useRef<string>('muse');
   const currentProductNameRef = useRef<string>('Meta Muse');
   const progressSummaryRef = useRef<ProgressSummaryDoc | null>(null);
+  const routineProgressMapRef = useRef<Record<string, RoutineProgressDoc>>({});
+  const userProjectsMapRef = useRef<Record<string, UserProjectDoc>>({});
+  const toolsProfileRef = useRef<ToolsProfileDoc | null>(null);
   const sessionNotesRef = useRef<SessionNote[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
   const conversationIdRef = useRef<string>(createConversationId());
@@ -160,16 +191,23 @@ export default function App() {
   const saveDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userTurnCountRef = useRef<number>(0);
   const lastSummarizedTurnCountRef = useRef<number>(0);
+  const lastSummarizedAtRef = useRef<number>(0);
   const isSummarizingRef = useRef<boolean>(false);
 
   userRef.current = user;
+  if (user?.uid) {
+    lastSignedInUidRef.current = user.uid;
+  }
   currentProductRef.current = currentProduct;
   currentProductNameRef.current = currentProductName;
   progressSummaryRef.current = progressSummary;
+  routineProgressMapRef.current = routineProgressMap;
+  userProjectsMapRef.current = userProjectsMap;
+  toolsProfileRef.current = toolsProfile;
   sessionNotesRef.current = sessionNotes;
   messagesRef.current = messages;
 
-  // Flush current conversation to Firestore immediately
+  // Flush current conversation to Firestore immediately (without calling listUserConversations)
   const flushSaveConversation = useCallback(
     async (overrideProduct?: string, overrideConvId?: string, overrideStartedAt?: string, overrideMsgs?: ChatMessage[]) => {
       if (saveDebounceTimerRef.current) {
@@ -192,9 +230,6 @@ export default function App() {
           messages: msgs,
           summary: progressSummaryRef.current?.product === prod ? progressSummaryRef.current?.summary : undefined,
         });
-
-        const allConvs = await listUserConversations(u.uid);
-        setPastConversations(allConvs);
       } catch (err: any) {
         setLiveError(
           err?.message ||
@@ -206,6 +241,8 @@ export default function App() {
   );
 
   // Run POST /api/summarize and save to users/{uid}/progress/{product}
+  // Never summarize more than once every 5 minutes except when force === true (End session, routine completion, report send).
+  // Never show summary rate-limit or summary failure errors in the amber banner — log them only.
   const runProgressSummarize = useCallback(
     async (options?: { force?: boolean }): Promise<string | void> => {
       const u = userRef.current;
@@ -225,11 +262,17 @@ export default function App() {
         return progressSummaryRef.current?.summary;
       }
 
+      const now = Date.now();
+      if (!options?.force && now - lastSummarizedAtRef.current < FIVE_MINUTES_MS) {
+        return progressSummaryRef.current?.summary;
+      }
+
       if (isSummarizingRef.current) {
         return progressSummaryRef.current?.summary;
       }
       isSummarizingRef.current = true;
       lastSummarizedTurnCountRef.current = userTurnCountRef.current;
+      lastSummarizedAtRef.current = now;
 
       try {
         const routineState = clientRef.current?.getRoutineState() || null;
@@ -248,19 +291,11 @@ export default function App() {
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
-          if (res.status === 429) {
-            setLiveError(
-              errData?.message ||
-                errData?.error ||
-                'Progress summary rate limit reached. Your conversation is still saved, and you can try again later.'
-            );
-          } else {
-            setLiveError(
-              errData?.message ||
-                errData?.error ||
-                "I couldn't update your progress summary just now. Your conversation is still saved."
-            );
-          }
+          console.warn(
+            `Summarize failed or rate-limited (HTTP ${res.status}):`,
+            errData?.message || errData?.error || res.statusText
+          );
+          // Keep existing summary when /api/summarize fails
           return progressSummaryRef.current?.summary;
         }
 
@@ -285,17 +320,11 @@ export default function App() {
             messages: msgs,
             summary: savedDoc.summary,
           });
-          const allConvs = await listUserConversations(u.uid);
-          setPastConversations(allConvs);
 
           return savedDoc.summary;
         }
       } catch (err: any) {
         console.warn('Summarize failed:', err);
-        setLiveError(
-          err?.message ||
-            "I couldn't save your progress summary just now. Your conversation is still kept in this browser — check your connection."
-        );
       } finally {
         isSummarizingRef.current = false;
       }
@@ -354,20 +383,43 @@ export default function App() {
             if (!Array.isArray(apps)) return;
             const found = apps.find((a: any) => a.id === appId);
             if (found && clientRef.current) {
-              clientRef.current.addMessage(
-                'guide',
-                `I've opened the "${found.title}" guide for you below:`,
-                {
-                  source: 'typed',
-                  appCard: {
-                    appId: found.id,
-                    title: found.title,
-                    goal: found.goal,
-                    activeStep: 1,
-                    steps: found.steps.map((s: any) => ({ ...s, completed: false })),
-                  },
-                }
-              );
+              const existingProg = routineProgressMapRef.current[found.id];
+              const { appCard, isResumingInProgress, restoredStepNumber } =
+                clientRef.current.buildAppCardWithRestoredProgress(found, existingProg);
+
+              const introText = isResumingInProgress
+                ? `You were on step ${restoredStepNumber} last time. Pick up there?`
+                : `I've opened the "${found.title}" guide for you below:`;
+
+              clientRef.current.addMessage('guide', introText, {
+                source: 'typed',
+                appCard,
+              });
+
+              const u = userRef.current;
+              if (u) {
+                const completedSteps = appCard.steps
+                  .filter(s => Boolean(s.completed))
+                  .map(s => ({
+                    step: Number(s.number),
+                    evidence: s.evidence || ('self' as const),
+                    note: s.note,
+                    at: s.at || new Date().toISOString(),
+                  }));
+                const status =
+                  appCard.steps.length > 0 && completedSteps.length === appCard.steps.length
+                    ? ('done' as const)
+                    : ('in-progress' as const);
+                saveUserRoutineProgress(u.uid, found.id, {
+                  status,
+                  completedSteps,
+                  activeStep: appCard.activeStep || 1,
+                })
+                  .then(saved => {
+                    setRoutineProgressMap(prev => ({ ...prev, [found.id]: saved }));
+                  })
+                  .catch(console.error);
+              }
             }
           })
           .catch(console.error);
@@ -395,8 +447,165 @@ export default function App() {
           runProgressSummarize();
         }
       },
-      onRoutineCompleted: () => {
+      onRoutineCompleted: (appId) => {
         runProgressSummarize({ force: true });
+        if (appId === 'getting-started') {
+          setTimeout(() => {
+            clientRef.current?.addMessage(
+              'guide',
+              "Now that you've finished Getting Started, would you like to pick the everyday tools you use (like Calendar or Email) so I can suggest projects that fit your setup?",
+              {
+                source: 'typed',
+                openToolsAction: true,
+              }
+            );
+          }, 300);
+        }
+      },
+      onRoutineProgressUpdated: (appId, progress) => {
+        const u = userRef.current;
+        if (!u || !appId) return;
+        saveUserRoutineProgress(u.uid, appId, progress)
+          .then(saved => {
+            setRoutineProgressMap(prev => ({ ...prev, [appId]: saved }));
+          })
+          .catch(console.error);
+      },
+      onToolsProfileUpdated: async (patch) => {
+        const u = userRef.current;
+        if (!u) return null;
+
+        const current = toolsProfileRef.current || {
+          devices: [],
+          tools: [],
+          other: '',
+          updatedAt: new Date().toISOString(),
+        };
+
+        const undoSnapshot: ToolsProfileDoc = {
+          devices: [...(current.devices || [])],
+          tools: (current.tools || []).map(t => ({ ...t })),
+          other: current.other || '',
+          updatedAt: current.updatedAt || new Date().toISOString(),
+        };
+
+        const nextDevices = [...(current.devices || [])];
+        const addedDevices: string[] = [];
+        for (const dev of patch.devices || []) {
+          const trimmed = String(dev || '').trim();
+          if (trimmed && !nextDevices.includes(trimmed)) {
+            nextDevices.push(trimmed);
+            addedDevices.push(trimmed);
+          }
+        }
+
+        const removeIds = new Set((patch.remove || []).map(r => String(r).toLowerCase().trim()));
+        const removedNames: string[] = [];
+        let nextTools: UserToolEntry[] = (current.tools || []).filter(t => {
+          if (removeIds.has(t.id.toLowerCase())) {
+            removedNames.push(t.name || t.id);
+            return false;
+          }
+          return true;
+        });
+
+        const addedToolLabels: string[] = [];
+        for (const item of patch.add || []) {
+          if (!item || !item.id) continue;
+          const existingIdx = nextTools.findIndex(t => t.id === item.id);
+          const entry: UserToolEntry = {
+            id: item.id,
+            name: item.name || item.id,
+            category: item.category || 'other',
+            account: item.account === 'work' ? 'work' : 'personal',
+            sensitive: Boolean(item.sensitive),
+          };
+          if (existingIdx !== -1) {
+            nextTools[existingIdx] = entry;
+          } else {
+            nextTools.push(entry);
+          }
+          const shortName = entry.name.split('/')[0].trim();
+          const detailParts: string[] = [entry.account];
+          if (entry.sensitive) detailParts.push('sensitive');
+          addedToolLabels.push(`${shortName} (${detailParts.join(', ')})`);
+        }
+
+        let nextOther = current.other || '';
+        const otherAddedLabels: string[] = [];
+        for (const rawOther of patch.otherAdded || []) {
+          const clean = String(rawOther || '').trim();
+          if (!clean) continue;
+          const existingList = nextOther
+            .split(',')
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean);
+          if (!existingList.includes(clean.toLowerCase())) {
+            nextOther = nextOther ? `${nextOther}, ${clean}` : clean;
+            otherAddedLabels.push(clean);
+          }
+        }
+
+        const summaryParts: string[] = [];
+        if (addedToolLabels.length > 0) {
+          summaryParts.push(`Added ${addedToolLabels.join(', ')} to your tools`);
+        }
+        if (otherAddedLabels.length > 0) {
+          summaryParts.push(`Added ${otherAddedLabels.join(', ')} to your other tools`);
+        }
+        if (removedNames.length > 0) {
+          summaryParts.push(`Removed ${removedNames.join(', ')} from your tools`);
+        }
+        if (addedDevices.length > 0) {
+          summaryParts.push(`Saved ${addedDevices.join(', ')} to your devices`);
+        }
+
+        if (summaryParts.length === 0) {
+          return null;
+        }
+
+        try {
+          const saved = await saveUserToolsProfile(u.uid, {
+            devices: nextDevices,
+            tools: nextTools,
+            other: nextOther,
+          });
+          setToolsProfile(saved);
+          toolsProfileRef.current = saved;
+          return {
+            summaryLine: summaryParts.join(' · '),
+            undoSnapshot,
+          };
+        } catch (err) {
+          console.error('Failed to apply tools profile patch:', err);
+          return null;
+        }
+      },
+      onContractSaved: async (card) => {
+        const u = userRef.current;
+        if (!u) return null;
+        try {
+          const existing = userProjectsMapRef.current[card.projectId] || null;
+          const saved = await saveUserProjectContract(u.uid, card.projectId, {
+            title: card.title,
+            product: currentProductRef.current,
+            contract: card.contract,
+            rung: card.rung,
+            status: existing?.status || 'active',
+          });
+          setUserProjectsMap(prev => ({ ...prev, [saved.projectId]: saved }));
+          userProjectsMapRef.current = {
+            ...userProjectsMapRef.current,
+            [saved.projectId]: saved,
+          };
+          return saved;
+        } catch (err: any) {
+          setLiveError(
+            err?.message ||
+              "I couldn't save your project contract to your account just now. Check your connection and try again."
+          );
+          return null;
+        }
       },
     });
 
@@ -415,8 +624,10 @@ export default function App() {
       productName: currentProductName,
       progressSummary,
       sessionNotes: sessionNotes.map(n => n.text),
+      toolsProfile,
+      userProjects: userProjectsMap,
     });
-  }, [user, currentProduct, currentProductName, progressSummary, sessionNotes]);
+  }, [user, currentProduct, currentProductName, progressSummary, sessionNotes, toolsProfile, userProjectsMap]);
 
   // Check URL path on load (/admin) and fetch public /api/products & /api/health
   useEffect(() => {
@@ -454,27 +665,36 @@ export default function App() {
       .catch(console.error);
   }, []);
 
-  // Load or restore conversation, progress summary, and notes for a given user & product
+  // Load or restore conversation, progress summary, routine progress, tools profile, projects, and notes for a given user & product
   const loadProductSessionAndMemory = useCallback(
     async (uid: string, product: string, productName: string) => {
       conversationReadyRef.current = false;
       try {
-        const [notes, progressDoc, recentConv, allConvs] = await Promise.all([
-          getUserSessionNotes(uid, product),
-          getUserProgressSummary(uid, product),
-          getRecentProductConversation(uid, product),
-          listUserConversations(uid),
-        ]);
+        const [notes, progressDoc, recentConv, routinesProg, loadedToolsProfile, loadedProjects] =
+          await Promise.all([
+            getUserSessionNotes(uid, product),
+            getUserProgressSummary(uid, product),
+            getRecentProductConversation(uid, product),
+            getUserRoutinesProgress(uid),
+            getUserToolsProfile(uid),
+            getUserProjects(uid),
+          ]);
 
         setSessionNotes(notes);
         setProgressSummary(progressDoc);
-        setPastConversations(allConvs);
+        setRoutineProgressMap(routinesProg);
+        setToolsProfile(loadedToolsProfile);
+        toolsProfileRef.current = loadedToolsProfile;
+        setUserProjectsMap(loadedProjects);
+        userProjectsMapRef.current = loadedProjects;
 
         clientRef.current?.updateConfig({
           product,
           productName,
           progressSummary: progressDoc,
           sessionNotes: notes.map(n => n.text),
+          toolsProfile: loadedToolsProfile,
+          userProjects: loadedProjects,
         });
 
         const isRecent =
@@ -516,12 +736,37 @@ export default function App() {
     []
   );
 
+  // Load the conversation list when the Notes drawer opens
+  useEffect(() => {
+    if (showNotesDrawer && user) {
+      listUserConversations(user.uid)
+        .then(convs => setPastConversations(convs))
+        .catch(console.error);
+    }
+  }, [showNotesDrawer, user]);
+
   // Auth observer (Google sign-in required; does NOT depend on currentProduct)
   useEffect(() => {
     const unsub = authService.onAuthStateChanged(async (u) => {
-      setUser(u);
-      setAuthReady(true);
       if (u) {
+        lastSignedInUidRef.current = u.uid;
+        setUser(u);
+        setAuthReady(true);
+
+        authFetch('/api/me')
+          .then(res => (res.ok ? res.json() : null))
+          .then(data => setIsAdminUser(Boolean(data?.isAdmin)))
+          .catch(() => setIsAdminUser(false));
+
+        authFetch('/api/tools-catalog')
+          .then(res => (res.ok ? res.json() : null))
+          .then(data => {
+            if (data && Array.isArray(data.categories)) {
+              setToolsCatalog(data);
+            }
+          })
+          .catch(console.error);
+
         const consent = await getUserConsent(u.uid);
         setHasAcceptedConsent(consent);
         setShowConsentModal(!consent);
@@ -531,11 +776,29 @@ export default function App() {
           currentProductNameRef.current
         );
       } else {
+        // Stop live session and screen share BEFORE rendering the login screen, and clear user localStorage keys
+        const prevUid = lastSignedInUidRef.current || userRef.current?.uid;
+        clientRef.current?.stopLiveSession();
+        clientRef.current?.stopScreenShare();
+        setIsScreenSharing(false);
+        setCurrentScreenFrame(null);
+        if (prevUid) {
+          clearUserLocalStorage(prevUid);
+        }
+        lastSignedInUidRef.current = null;
         conversationReadyRef.current = false;
         setShowConsentModal(false);
+        setShowToolsModal(false);
         setSessionNotes([]);
         setProgressSummary(null);
+        setRoutineProgressMap({});
+        setUserProjectsMap({});
+        userProjectsMapRef.current = {};
+        setToolsProfile(null);
         setPastConversations([]);
+        setIsAdminUser(false);
+        setUser(null);
+        setAuthReady(true);
       }
     });
     return unsub;
@@ -560,7 +823,7 @@ export default function App() {
       .catch(console.error);
   }, [user, currentProduct]);
 
-  // 2-second debounced conversation save after messages change
+  // 2-second debounced conversation save after messages change (without calling listUserConversations)
   useEffect(() => {
     if (!user || !conversationReadyRef.current || messages.length === 0) return;
 
@@ -580,15 +843,12 @@ export default function App() {
         startedAt,
         messages: snapshotMessages,
         summary: progressSummaryRef.current?.product === prod ? progressSummaryRef.current?.summary : undefined,
-      })
-        .then(() => listUserConversations(uid))
-        .then(convs => setPastConversations(convs))
-        .catch((err: any) => {
-          setLiveError(
-            err?.message ||
-              "I couldn't save your latest progress to your account just now. Your chat is still kept in this browser — check your connection."
-          );
-        });
+      }).catch((err: any) => {
+        setLiveError(
+          err?.message ||
+            "I couldn't save your latest progress to your account just now. Your chat is still kept in this browser — check your connection."
+        );
+      });
     }, 2000);
 
     return () => {
@@ -598,14 +858,11 @@ export default function App() {
     };
   }, [messages, user, currentProduct]);
 
-  // Save conversation once more + best-effort summarize on page hide
+  // On visibilitychange: ONLY flush-save the conversation. On pagehide: flush-save and best-effort summarize.
   useEffect(() => {
-    const handleVisibilityOrHide = () => {
+    const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         flushSaveConversation();
-        if (userTurnCountRef.current > 0) {
-          runProgressSummarize();
-        }
       }
     };
 
@@ -616,10 +873,10 @@ export default function App() {
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityOrHide);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', handlePageHide);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityOrHide);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageHide);
     };
   }, [flushSaveConversation, runProgressSummarize]);
@@ -750,7 +1007,8 @@ export default function App() {
 
   const handleLaunchApp = async (app: any) => {
     if (!clientRef.current) return;
-    await clientRef.current.startGuidedRoutine(app);
+    const existingProg = routineProgressMapRef.current[app.id] || null;
+    await clientRef.current.startGuidedRoutine(app, existingProg);
   };
 
   const handleDeleteNote = async (noteId: string) => {
@@ -802,6 +1060,11 @@ export default function App() {
     await deleteAllUserHistory(user.uid);
     setSessionNotes([]);
     setProgressSummary(null);
+    setRoutineProgressMap({});
+    setUserProjectsMap({});
+    userProjectsMapRef.current = {};
+    setToolsProfile(null);
+    toolsProfileRef.current = null;
     setPastConversations([]);
     const newId = createConversationId();
     conversationIdRef.current = newId;
@@ -817,6 +1080,177 @@ export default function App() {
         source: 'typed',
       },
     ]);
+  };
+
+  const handleSaveToolsProfile = async (
+    nextProfile: { devices: string[]; tools: UserToolEntry[]; other: string },
+    shareAnonymously: boolean
+  ) => {
+    if (!user) return;
+    const saved = await saveUserToolsProfile(user.uid, nextProfile);
+    setToolsProfile(saved);
+    toolsProfileRef.current = saved;
+    clientRef.current?.updateConfig({ toolsProfile: saved });
+    clientRef.current?.pushLiveContextRefresh(false, true);
+
+    if (shareAnonymously) {
+      const res = await authFetch('/api/tools-share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          devices: saved.devices,
+          tools: saved.tools,
+          other: saved.other,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok !== true) {
+        throw new Error(
+          data?.message ||
+            "Your tools profile was saved to your account, but anonymous sharing with Nic couldn't be completed right now."
+        );
+      }
+    }
+  };
+
+  const handleUndoToolsProfile = async (messageId: string, snapshot: ToolsProfileDoc) => {
+    if (!user) return;
+    try {
+      const restored = await saveUserToolsProfile(user.uid, {
+        devices: snapshot.devices || [],
+        tools: snapshot.tools || [],
+        other: snapshot.other || '',
+      });
+      setToolsProfile(restored);
+      toolsProfileRef.current = restored;
+      clientRef.current?.updateConfig({ toolsProfile: restored });
+      clientRef.current?.markToolsUndoApplied(messageId);
+    } catch (err: any) {
+      setLiveError(
+        err?.message || "I couldn't undo that change right now. You can edit your tools anytime from 'Your tools'."
+      );
+    }
+  };
+
+  const getProjectRungMeta = (projectId: string, rung: 0 | 1 | 2 | 3) => {
+    const matchedApp = guidedApps.find(a => a.id === projectId);
+    const title =
+      userProjectsMap[projectId]?.title || matchedApp?.title || projectId;
+    const rawLadder: Record<string, string> =
+      matchedApp?.ladder && typeof matchedApp.ladder === 'object'
+        ? matchedApp.ladder
+        : {
+            '0': 'Watch & learn — you do it; Muse helps you think.',
+            '1': 'Draft only — prepares it; you review and send.',
+            '2': 'Act inside boundaries — acts on routine items; asks before edge cases.',
+            '3': 'Scheduled with digest — runs on a schedule and sends a summary.',
+          };
+    const fallbackNames: Record<number, string> = {
+      0: 'Watch & learn',
+      1: 'Draft only',
+      2: 'Act inside boundaries',
+      3: 'Scheduled with digest',
+    };
+    const ladder: Array<{ rung: number; name: string; text: string }> = [0, 1, 2, 3].map(r => {
+      const raw = String(rawLadder[String(r)] || '');
+      const match = raw.match(/^([^—–-]+)[—–-]\s*(.+)$/);
+      return {
+        rung: r,
+        name: match ? match[1].trim() : fallbackNames[r] || `Rung ${r}`,
+        text: match ? match[2].trim() : raw,
+      };
+    });
+    const currentItem = ladder.find(l => l.rung === rung) || ladder[1];
+    return {
+      title,
+      ladder,
+      rungName: currentItem.name,
+      rungText: currentItem.text,
+    };
+  };
+
+  const handleViewProjectContract = (project: UserProjectDoc) => {
+    setOpenProjectMenuId(null);
+    if (!clientRef.current) return;
+    const { title, ladder, rungName, rungText } = getProjectRungMeta(
+      project.projectId,
+      project.rung
+    );
+    const card: StoredContractCard = {
+      projectId: project.projectId,
+      title,
+      contract: { ...project.contract },
+      rung: project.rung,
+      rungName,
+      rungText,
+      ladder,
+      saved: true,
+    };
+    clientRef.current.addMessage(
+      'guide',
+      `Here is your task contract for ${title} (currently at Rung ${project.rung}: ${rungName}):`,
+      {
+        source: 'typed',
+        contractCard: card,
+      }
+    );
+  };
+
+  const handleMoveProjectRung = async (project: UserProjectDoc, direction: 'up' | 'down') => {
+    setOpenProjectMenuId(null);
+    if (!clientRef.current) return;
+    const { title } = getProjectRungMeta(project.projectId, project.rung);
+    const targetRung =
+      direction === 'up'
+        ? Math.min(3, project.rung + 1)
+        : Math.max(0, project.rung - 1);
+    const prompt =
+      direction === 'up'
+        ? `I'd like to move ${title} up to rung ${targetRung}`
+        : `I'd like to move ${title} down to rung ${targetRung}`;
+    await clientRef.current.sendTextMessage(prompt);
+  };
+
+  const handleTogglePauseProject = async (project: UserProjectDoc) => {
+    setOpenProjectMenuId(null);
+    if (!user) return;
+    const nextStatus = project.status === 'paused' ? 'active' : 'paused';
+    try {
+      const updated = await updateUserProjectStatus(
+        user.uid,
+        project.projectId,
+        nextStatus
+      );
+      if (updated) {
+        const nextMap = { ...userProjectsMapRef.current, [project.projectId]: updated };
+        setUserProjectsMap(nextMap);
+        userProjectsMapRef.current = nextMap;
+        clientRef.current?.updateConfig({ userProjects: nextMap });
+        clientRef.current?.pushLiveContextRefresh(false, false, true);
+      }
+    } catch (err: any) {
+      setLiveError(
+        err?.message || "I couldn't update that project right now. Check your connection and try again."
+      );
+    }
+  };
+
+  const handleDeleteProject = async (project: UserProjectDoc) => {
+    setOpenProjectMenuId(null);
+    if (!user) return;
+    try {
+      await deleteUserProject(user.uid, project.projectId);
+      const nextMap = { ...userProjectsMapRef.current };
+      delete nextMap[project.projectId];
+      setUserProjectsMap(nextMap);
+      userProjectsMapRef.current = nextMap;
+      clientRef.current?.updateConfig({ userProjects: nextMap });
+      clientRef.current?.pushLiveContextRefresh(false, false, true);
+    } catch (err: any) {
+      setLiveError(
+        err?.message || "I couldn't delete that project right now. Check your connection and try again."
+      );
+    }
   };
 
   // Compute current routine progress & progress summary for ReportForNicCard
@@ -872,10 +1306,12 @@ export default function App() {
       {/* Top Bar Contract */}
       <TopNav
         user={user}
+        isAdmin={isAdminUser}
         currentProduct={currentProduct}
         onSelectProduct={handleSelectProduct}
         availableProducts={availableProducts}
         onOpenKnowledge={() => setShowKnowledgeModal(true)}
+        onOpenTools={() => setShowToolsModal(true)}
         onOpenApps={() => setShowAppsSidebar(prev => !prev)}
         onOpenNotes={() => setShowNotesDrawer(true)}
         onOpenEscalation={() => setShowEscalationModal(true)}
@@ -884,7 +1320,15 @@ export default function App() {
           window.history.pushState({}, '', '/admin');
         }}
         onSignOut={async () => {
+          const uidToClear = user?.uid || lastSignedInUidRef.current;
+          clientRef.current?.stopLiveSession();
+          clientRef.current?.stopScreenShare();
+          setIsScreenSharing(false);
+          setCurrentScreenFrame(null);
           await flushSaveConversation();
+          if (uidToClear) {
+            clearUserLocalStorage(uidToClear);
+          }
           await authService.signOut();
         }}
         onSignIn={() => {}}
@@ -942,6 +1386,21 @@ export default function App() {
                   <div key={m.id} className="text-center my-3">
                     <span className="text-[11px] font-mono text-[#78716C] bg-[#F4F0E8] border border-[#E6DFD3] px-3 py-1 rounded-full inline-flex items-center gap-2">
                       <span>{m.text}</span>
+                      {m.undoToolsProfileSnapshot && (
+                        m.undoApplied ? (
+                          <span className="text-[10px] text-[#78716C] italic">Undone</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUndoToolsProfile(m.id, m.undoToolsProfileSnapshot!)
+                            }
+                            className="underline text-[#9A3412] hover:text-[#1C1917] font-sans font-medium transition-colors"
+                          >
+                            Undo
+                          </button>
+                        )
+                      )}
                       {m.retryText && (
                         <button
                           type="button"
@@ -999,7 +1458,20 @@ export default function App() {
                         : 'bg-[#1C1917] text-[#FBF9F5]'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap">{m.text}</p>
+                    {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
+
+                    {m.openToolsAction && (
+                      <div className="mt-3 pt-2.5 border-t border-[#E6DFD3]">
+                        <button
+                          type="button"
+                          onClick={() => setShowToolsModal(true)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium transition-colors"
+                        >
+                          <Wrench className="w-3.5 h-3.5" />
+                          <span>Open Your tools</span>
+                        </button>
+                      </div>
+                    )}
 
                     {/* Stepped Guided App Card if attached */}
                     {m.appCard && (
@@ -1021,12 +1493,16 @@ export default function App() {
                           );
                         }}
                         onComplete={() => {
+                          const isGettingStarted = m.appCard?.appId === 'getting-started';
                           const savedNote = clientRef.current?.hasSavedNoteInRoutine();
                           const completionText = savedNote
                             ? `Great job completing the ${m.appCard?.title} routine! I have recorded your session notes.`
+                            : isGettingStarted
+                            ? `Great job completing the ${m.appCard?.title} routine! Would you like to pick the everyday tools you use so I can suggest projects that fit your setup?`
                             : `Great job completing the ${m.appCard?.title} routine!`;
                           clientRef.current?.addMessage('guide', completionText, {
                             source: 'typed',
+                            openToolsAction: isGettingStarted,
                           });
                           runProgressSummarize({ force: true });
                         }}
@@ -1039,6 +1515,7 @@ export default function App() {
                         initialGoal={m.reportCard.goal}
                         initialTried={m.reportCard.tried}
                         initialBlocker={m.reportCard.blocker}
+                        initialSentRefId={m.reportCard.sentRefId}
                         product={currentProduct}
                         productName={currentProductName}
                         transcript={messages.map(msg => ({ role: msg.role, text: msg.text }))}
@@ -1048,10 +1525,49 @@ export default function App() {
                         sheetWebhookConfigured={sheetWebhookConfigured}
                         onBeforeSendReport={() => runProgressSummarize({ force: true })}
                         onSent={(refId) => {
+                          clientRef.current?.markReportCardSent(m.id, refId);
                           clientRef.current?.addMessage(
                             'system',
                             `Sent to Nic. Reference: ${refId}`
                           );
+                        }}
+                      />
+                    )}
+
+                    {/* Task Contract Card if created by save_task_contract or View contract */}
+                    {m.contractCard && (
+                      <TaskContractCard
+                        card={m.contractCard}
+                        productName={currentProductName}
+                        onSave={async (updatedContract, effectiveRung) => {
+                          if (!user) return;
+                          const existing =
+                            userProjectsMapRef.current[m.contractCard!.projectId] || null;
+                          const savedDoc = await saveUserProjectContract(
+                            user.uid,
+                            m.contractCard!.projectId,
+                            {
+                              title: m.contractCard!.title,
+                              product: currentProduct,
+                              contract: updatedContract,
+                              rung: effectiveRung,
+                              status: existing?.status || 'active',
+                            }
+                          );
+                          const nextMap = {
+                            ...userProjectsMapRef.current,
+                            [savedDoc.projectId]: savedDoc,
+                          };
+                          setUserProjectsMap(nextMap);
+                          userProjectsMapRef.current = nextMap;
+                          clientRef.current?.updateConfig({ userProjects: nextMap });
+                          const nextCard: StoredContractCard = {
+                            ...m.contractCard!,
+                            contract: savedDoc.contract,
+                            rung: savedDoc.rung,
+                            saved: true,
+                          };
+                          clientRef.current?.updateContractCardInMessage(m.id, nextCard);
                         }}
                       />
                     )}
@@ -1220,52 +1736,347 @@ export default function App() {
 
         {/* Guided Apps Sidebar */}
         {showAppsSidebar && (
-          <div className="w-full lg:w-80 p-6 bg-[#F4F0E8] border-l border-[#E6DFD3] flex flex-col space-y-5 overflow-y-auto">
-            <div>
-              <span className="text-xs font-mono uppercase tracking-widest text-[#78716C]">
-                Guided Workflows
-              </span>
-              <h3 className="text-xl font-editorial font-medium text-[#1C1917] mt-0.5">
-                Safe Step Routines
-              </h3>
-              <p className="text-xs text-[#78716C] mt-1">
-                Short guided prompt flows with step-by-step guardrails for {currentProductName}.
-              </p>
+          <div className="w-full lg:w-88 p-5 bg-[#F4F0E8] border-l border-[#E6DFD3] flex flex-col space-y-5 overflow-y-auto h-[calc(100vh-140px)]">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <span className="text-xs font-mono uppercase tracking-widest text-[#78716C]">
+                  Guided Workflows
+                </span>
+                <h3 className="text-xl font-editorial font-medium text-[#1C1917] mt-0.5">
+                  Safe Step Routines
+                </h3>
+                <p className="text-xs text-[#78716C] mt-1">
+                  One step at a time for {currentProductName}.
+                </p>
+              </div>
             </div>
 
-            <div className="space-y-3">
-              {guidedApps.map((app) => (
-                <div
-                  key={app.id}
-                  className="p-4 bg-white border border-[#E6DFD3] rounded-xl text-xs space-y-2 hover:border-[#D6CEBE] transition-all shadow-2xs"
-                >
-                  <div className="flex items-start justify-between">
-                    <h4 className="font-semibold text-sm text-[#1C1917]">
-                      {app.title}
-                    </h4>
-                    <span className="text-[10px] text-[#78716C] font-mono">
-                      {app.estimatedTime}
-                    </span>
-                  </div>
-
-                  <p className="text-[#57534E] text-[11px] leading-relaxed">
-                    {app.goal}
-                  </p>
-
-                  <div className="pt-2 flex items-center justify-between border-t border-[#F4F0E8]">
-                    <span className="text-[10px] text-[#78716C]">
-                      {app.steps?.length || 0} guided steps
-                    </span>
-                    <button
-                      onClick={() => handleLaunchApp(app)}
-                      className="px-2.5 py-1 bg-[#1C1917] text-white rounded text-[11px] hover:bg-[#292524] transition-colors"
-                    >
-                      Start Routine
-                    </button>
+            {/* Your tools profile shortcut in sidebar */}
+            <button
+              type="button"
+              onClick={() => setShowToolsModal(true)}
+              className="w-full p-3 bg-white hover:bg-[#FBF9F5] border border-[#E6DFD3] hover:border-[#D6CEBE] rounded-xl text-left transition-all flex items-center justify-between gap-2 shadow-2xs"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-[#F4F0E8] border border-[#E6DFD3] flex items-center justify-center shrink-0">
+                  <Wrench className="w-3.5 h-3.5 text-[#9A3412]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-[#1C1917]">Your tools</div>
+                  <div className="text-[11px] text-[#78716C] truncate">
+                    {toolsProfile && (toolsProfile.tools.length > 0 || toolsProfile.devices.length > 0)
+                      ? `${toolsProfile.tools.length} tool${toolsProfile.tools.length === 1 ? '' : 's'}${
+                          toolsProfile.devices.length > 0
+                            ? ` · ${toolsProfile.devices.join(', ')}`
+                            : ''
+                        }`
+                      : 'Tell me what you use'}
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-[#78716C] shrink-0" />
+            </button>
+
+            {/* My projects section at the top of the sidebar (only if the user has projects) */}
+            {Object.keys(userProjectsMap).length > 0 && (
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between border-b border-[#E6DFD3] pb-1">
+                  <h4 className="text-xs font-mono uppercase tracking-wider font-semibold text-[#57534E]">
+                    My projects
+                  </h4>
+                  <span className="text-[10px] font-mono text-[#78716C]">
+                    {Object.keys(userProjectsMap).length}
+                  </span>
+                </div>
+
+                <div className="space-y-2.5">
+                  {(Object.values(userProjectsMap) as UserProjectDoc[])
+                    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+                    .map((proj) => {
+                      const { title, rungName } = getProjectRungMeta(
+                        proj.projectId,
+                        proj.rung
+                      );
+                      const isMenuOpen = openProjectMenuId === proj.projectId;
+                      const isPaused = proj.status === 'paused';
+
+                      return (
+                        <div
+                          key={proj.projectId}
+                          className={`p-3.5 bg-white border rounded-xl text-xs space-y-2 transition-all shadow-2xs relative ${
+                            isPaused
+                              ? 'border-[#E6DFD3] opacity-75'
+                              : 'border-[#E6DFD3] hover:border-[#D6CEBE]'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <h5 className="font-semibold text-sm text-[#1C1917] leading-snug truncate">
+                                  {title}
+                                </h5>
+                                {isPaused && (
+                                  <span className="px-1.5 py-0.5 rounded bg-[#F4F0E8] border border-[#E6DFD3] text-[9px] font-mono uppercase text-[#78716C]">
+                                    Paused
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Small Project Menu */}
+                            <div className="relative shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenProjectMenuId(isMenuOpen ? null : proj.projectId)
+                                }
+                                className="p-1 rounded-lg hover:bg-[#F4F0E8] text-[#57534E] hover:text-[#1C1917] transition-colors"
+                                title="Project options"
+                              >
+                                <MoreHorizontal className="w-4 h-4" />
+                              </button>
+
+                              {isMenuOpen && (
+                                <div className="absolute right-0 mt-1 w-44 bg-white border border-[#E6DFD3] rounded-xl shadow-lg py-1 z-30 text-xs">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleViewProjectContract(proj)}
+                                    className="w-full px-3 py-1.5 text-left hover:bg-[#F4F0E8] text-[#1C1917] flex items-center gap-2"
+                                  >
+                                    <FileText className="w-3.5 h-3.5 text-[#78716C]" />
+                                    <span>View contract</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={proj.rung >= 3}
+                                    onClick={() => handleMoveProjectRung(proj, 'up')}
+                                    className="w-full px-3 py-1.5 text-left hover:bg-[#F4F0E8] disabled:opacity-40 disabled:hover:bg-white text-[#1C1917] flex items-center gap-2"
+                                  >
+                                    <ArrowUp className="w-3.5 h-3.5 text-[#14532D]" />
+                                    <span>Move up a rung</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={proj.rung <= 0}
+                                    onClick={() => handleMoveProjectRung(proj, 'down')}
+                                    className="w-full px-3 py-1.5 text-left hover:bg-[#F4F0E8] disabled:opacity-40 disabled:hover:bg-white text-[#1C1917] flex items-center gap-2"
+                                  >
+                                    <ArrowDown className="w-3.5 h-3.5 text-[#9A3412]" />
+                                    <span>Move down a rung</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleTogglePauseProject(proj)}
+                                    className="w-full px-3 py-1.5 text-left hover:bg-[#F4F0E8] text-[#1C1917] flex items-center gap-2"
+                                  >
+                                    {isPaused ? (
+                                      <>
+                                        <Play className="w-3.5 h-3.5 text-[#14532D]" />
+                                        <span>Resume</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Pause className="w-3.5 h-3.5 text-[#78716C]" />
+                                        <span>Pause</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <div className="my-1 border-t border-[#F4F0E8]" />
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteProject(proj)}
+                                    className="w-full px-3 py-1.5 text-left hover:bg-red-50 text-[#9A3412] flex items-center gap-2"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Delete</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Four-dot rung indicator + rung name */}
+                          <div className="flex items-center justify-between gap-2 pt-1">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="flex items-center gap-1"
+                                title={`Rung ${proj.rung} of 3: ${rungName}`}
+                              >
+                                {([0, 1, 2, 3] as const).map((r) => {
+                                  const filled = r <= proj.rung;
+                                  return (
+                                    <span
+                                      key={r}
+                                      className={`w-2 h-2 rounded-full transition-colors ${
+                                        filled
+                                          ? 'bg-[#14532D]'
+                                          : 'bg-[#E6DFD3] border border-[#D6CEBE]'
+                                      }`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <span className="text-[11px] font-medium text-[#1C1917]">
+                                {rungName}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-[#78716C]">
+                              Rung {proj.rung}
+                            </span>
+                          </div>
+
+                          {proj.contract?.goal && (
+                            <p className="text-[11px] text-[#57534E] line-clamp-2 leading-relaxed pt-1 border-t border-[#F4F0E8]">
+                              {proj.contract.goal}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {(
+              [
+                { type: 'setup', label: 'Start here' },
+                { type: 'project', label: 'Projects' },
+                { type: 'checkup', label: 'Check-ups' },
+                { type: 'support', label: 'Help' },
+              ] as const
+            ).map(group => {
+              const groupApps = guidedApps
+                .filter(a => (a.type || 'setup') === group.type)
+                .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+
+              if (groupApps.length === 0) return null;
+
+              return (
+                <div key={group.type} className="space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-[#E6DFD3] pb-1">
+                    <h4 className="text-xs font-mono uppercase tracking-wider font-semibold text-[#57534E]">
+                      {group.label}
+                    </h4>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {groupApps.map(app => {
+                      const prog = routineProgressMap[app.id];
+                      const totalSteps = app.steps?.length || 0;
+                      const statusLabel =
+                        prog?.status === 'done'
+                          ? 'Done ✓'
+                          : prog?.status === 'in-progress'
+                          ? `Step ${Math.min(Math.max(prog.activeStep || 1, 1), totalSteps || 1)} of ${totalSteps}`
+                          : 'Not started';
+
+                      const recAfterIds: string[] = Array.isArray(app.recommended_after)
+                        ? app.recommended_after
+                        : [];
+                      const unfinishedRecTitles = recAfterIds
+                        .filter(reqId => routineProgressMap[reqId]?.status !== 'done')
+                        .map(reqId => {
+                          const matched = guidedApps.find(g => g.id === reqId);
+                          return matched?.title || reqId;
+                        });
+
+                      const requiresList: string[] = Array.isArray(app.requires)
+                        ? app.requires
+                        : [];
+                      const fitsYourTools =
+                        requiresList.length > 0 &&
+                        Boolean(toolsProfile?.tools?.length) &&
+                        requiresList.every(req => {
+                          const r = String(req || '').toLowerCase().trim();
+                          return toolsProfile!.tools.some(
+                            t =>
+                              t.category.toLowerCase() === r ||
+                              t.id.toLowerCase() === r
+                          );
+                        });
+
+                      const riskVal = String(app.risk || '').toLowerCase();
+                      const riskBadgeClass =
+                        riskVal === 'low'
+                          ? 'bg-[#14532D]/10 text-[#14532D] border-[#14532D]/20'
+                          : riskVal === 'medium'
+                          ? 'bg-amber-100/80 text-amber-900 border-amber-300'
+                          : riskVal === 'high'
+                          ? 'bg-[#9A3412]/10 text-[#9A3412] border-[#9A3412]/25'
+                          : 'bg-[#F4F0E8] text-[#57534E] border-[#E6DFD3]';
+
+                      return (
+                        <div
+                          key={app.id}
+                          className="p-3.5 bg-white border border-[#E6DFD3] rounded-xl text-xs space-y-2 hover:border-[#D6CEBE] transition-all shadow-2xs"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <h5 className="font-semibold text-sm text-[#1C1917] leading-snug">
+                              {app.title}
+                            </h5>
+                            <span className="text-[10px] text-[#78716C] font-mono shrink-0">
+                              {app.estimated_time || app.estimatedTime}
+                            </span>
+                          </div>
+
+                          {( (group.type === 'project' && app.risk) || fitsYourTools ) && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {group.type === 'project' && app.risk && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded border text-[10px] font-mono uppercase ${riskBadgeClass}`}
+                                >
+                                  Risk: {app.risk}
+                                </span>
+                              )}
+                              {fitsYourTools && (
+                                <span className="px-1.5 py-0.5 rounded border text-[10px] font-mono bg-[#14532D]/10 text-[#14532D] border-[#14532D]/25">
+                                  Fits your tools
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          <p className="text-[#57534E] text-[11px] leading-relaxed">
+                            {app.summary || app.goal}
+                          </p>
+
+                          {group.type === 'project' && unfinishedRecTitles.length > 0 && (
+                            <p className="text-[10px] text-[#78716C] italic">
+                              Best after {unfinishedRecTitles.join(' & ')}
+                            </p>
+                          )}
+
+                          <div className="pt-2 flex items-center justify-between border-t border-[#F4F0E8]">
+                            <span
+                              className={`text-[10px] font-mono ${
+                                prog?.status === 'done'
+                                  ? 'text-[#14532D] font-semibold'
+                                  : prog?.status === 'in-progress'
+                                  ? 'text-[#9A3412] font-medium'
+                                  : 'text-[#78716C]'
+                              }`}
+                            >
+                              {statusLabel}
+                            </span>
+                            <button
+                              onClick={() => handleLaunchApp(app)}
+                              className="px-2.5 py-1 bg-[#1C1917] text-white rounded text-[11px] hover:bg-[#292524] transition-colors"
+                            >
+                              {prog?.status === 'in-progress' ? 'Continue' : 'Start Routine'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
 
             {/* Quick Progress & Session Notes Preview */}
             <div className="border-t border-[#E6DFD3] pt-4 space-y-2">
@@ -1275,7 +2086,7 @@ export default function App() {
                   onClick={() => setShowNotesDrawer(true)}
                   className="text-[11px] text-[#9A3412] hover:underline"
                 >
-                  Notes & History ({pastConversations.length})
+                  Notes & History
                 </button>
               </div>
 
@@ -1350,6 +2161,9 @@ export default function App() {
         onSaveProgressSummary={handleSaveManualProgressSummary}
         onDeleteProgressSummary={handleDeleteProgressSummary}
         pastConversations={pastConversations}
+        onLoadConversation={(convId) =>
+          user ? getUserConversation(user.uid, convId) : Promise.resolve(null)
+        }
         onDeleteConversation={handleDeleteConversation}
         onDeleteAllHistory={handleDeleteAllHistory}
       />
@@ -1359,6 +2173,14 @@ export default function App() {
         onClose={() => setShowKnowledgeModal(false)}
         productName={currentProductName}
         knowledge={knowledgeData}
+      />
+
+      <ToolsProfileModal
+        isOpen={showToolsModal}
+        onClose={() => setShowToolsModal(false)}
+        catalog={toolsCatalog}
+        initialProfile={toolsProfile}
+        onSave={handleSaveToolsProfile}
       />
     </div>
   );

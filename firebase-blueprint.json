@@ -119,6 +119,85 @@
         }
       },
       "required": ["product", "summary", "updatedAt"]
+    },
+    "RoutineProgress": {
+      "title": "RoutineProgress",
+      "description": "Per-user routine progress across conversations",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not-started", "in-progress", "done"]
+        },
+        "completedSteps": {
+          "type": "array",
+          "description": "Completed step records with step, evidence, note, at"
+        },
+        "activeStep": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["status", "completedSteps", "activeStep", "updatedAt"]
+    },
+    "ToolsProfile": {
+      "title": "ToolsProfile",
+      "description": "User tools and devices profile",
+      "type": "object",
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tools": {
+          "type": "array",
+          "description": "Selected tools with id, name, category, account, sensitive"
+        },
+        "other": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["devices", "tools", "other", "updatedAt"]
+    },
+    "ProjectContract": {
+      "title": "ProjectContract",
+      "description": "Saved user project task contract and autonomy ladder rung",
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "object",
+          "description": "Six contract fields: goal, do, do_not, ask_me_before, report_back, stop_if"
+        },
+        "rung": {
+          "type": "number",
+          "description": "Current autonomy ladder rung (0-3)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"]
+        },
+        "history": {
+          "type": "array",
+          "description": "History of rung changes [{ rung, at }]"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["contract", "rung", "status", "history", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -137,6 +216,18 @@
     "/users/{userId}/progress/{product}": {
       "schema": { "$ref": "#/entities/ProgressSummary" },
       "description": "Per-user per-product progress summary"
+    },
+    "/users/{userId}/routines/{appId}": {
+      "schema": { "$ref": "#/entities/RoutineProgress" },
+      "description": "Per-user routine progress across sessions"
+    },
+    "/users/{userId}/profile/tools": {
+      "schema": { "$ref": "#/entities/ToolsProfile" },
+      "description": "Per-user tools and devices profile"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/ProjectContract" },
+      "description": "Per-user saved project task contracts and autonomy ladder state"
     }
   }
 }

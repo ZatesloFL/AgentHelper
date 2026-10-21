@@ -16,16 +16,20 @@ import {
   getAllRegisteredProducts,
   getKnowledge,
   getGuidedApps,
+  getToolsCatalog,
 } from './server/knowledge.js';
 import { getEnabledProducts, isKnownProduct } from './server/products.js';
 import { requireUser, requireAdmin } from './server/auth.js';
 import {
   rateLimitChat,
   rateLimitReport,
+  recordReportSendSuccess,
   rateLimitSummarize,
   rateLimitReportDraft,
+  rateLimitToolsShare,
+  recordToolsShareSuccess,
 } from './server/rate-limit.js';
-import { dispatchHandoffReport } from './server/escalations.js';
+import { dispatchHandoffReport, dispatchToolsShare } from './server/escalations.js';
 import { setupLiveWebSocket } from './server/live-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -73,8 +77,20 @@ async function startServer() {
   // --- Authenticated API Routes (requireUser applied to every other /api route) ---
   app.use('/api', requireUser);
 
+  // Current signed-in user info & admin status
+  app.get('/api/me', (req, res) => {
+    const email = (req.user?.email || '').toLowerCase();
+    const isAdmin = Boolean(email && config.adminEmails.includes(email));
+    res.json({
+      uid: req.user?.uid,
+      email: req.user?.email,
+      name: req.user?.name,
+      isAdmin,
+    });
+  });
+
   // Text Chat Fallback (20 req/min per uid, validated product & input caps)
-  app.post('/api/chat', requireUser, rateLimitChat, async (req, res) => {
+  app.post('/api/chat', rateLimitChat, async (req, res) => {
     try {
       const {
         product = 'muse',
@@ -84,6 +100,8 @@ async function startServer() {
         routineState,
         progressSummary,
         sessionNotes,
+        toolsProfile,
+        userProjects,
       } = req.body || {};
 
       if (!isKnownProduct(product)) {
@@ -131,6 +149,8 @@ async function startServer() {
         sessionNotes: Array.isArray(sessionNotes)
           ? sessionNotes.filter((n: any) => typeof n === 'string').slice(0, 20)
           : [],
+        toolsProfile: toolsProfile && typeof toolsProfile === 'object' ? toolsProfile : null,
+        userProjects: Array.isArray(userProjects) ? userProjects : null,
       });
       res.json(result);
     } catch (err: any) {
@@ -144,7 +164,7 @@ async function startServer() {
 
   // Session Progress Summarize (20 req/hour per uid)
   // Body: { product, transcript (last 80 messages), routineState, previousSummary }
-  app.post('/api/summarize', requireUser, rateLimitSummarize, async (req, res) => {
+  app.post('/api/summarize', rateLimitSummarize, async (req, res) => {
     try {
       const {
         product = 'muse',
@@ -173,13 +193,13 @@ async function startServer() {
       });
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Summary generation failed' });
+      res.status(503).json({ error: err?.message || 'Summary generation failed' });
     }
   });
 
   // Report Pre-fill with High Thinking (10 req/hour per uid)
   // Body: { product, transcript (last 40 messages), progressSummary, routineState }
-  app.post('/api/report/draft', requireUser, rateLimitReportDraft, async (req, res) => {
+  app.post('/api/report/draft', rateLimitReportDraft, async (req, res) => {
     try {
       const {
         product = 'muse',
@@ -207,7 +227,7 @@ async function startServer() {
     }
   });
 
-  // Handoff Report to Google Sheet (5 per day per uid; userName & userEmail always from verified token)
+  // Handoff Report to Google Sheet (5 successful sends per day per uid; userName & userEmail always from verified token)
   const handleReportHandler = async (req: express.Request, res: express.Response) => {
     try {
       const body = req.body || {};
@@ -238,6 +258,8 @@ async function startServer() {
         });
       }
 
+      recordReportSendSuccess(req.user!.uid);
+
       return res.json({
         ok: true,
         id: result.id,
@@ -252,11 +274,47 @@ async function startServer() {
     }
   };
 
-  app.post('/api/report', requireUser, rateLimitReport, handleReportHandler);
-  app.post('/api/escalate', requireUser, rateLimitReport, handleReportHandler);
+  app.post('/api/report', rateLimitReport, handleReportHandler);
+  app.post('/api/escalate', rateLimitReport, handleReportHandler);
+
+  // Tools Catalog (auth required)
+  app.get('/api/tools-catalog', (_req, res) => {
+    res.json(getToolsCatalog());
+  });
+
+  // Anonymous Tools Profile Share with Nic (10 sends per day per uid; no name or email)
+  app.post('/api/tools-share', rateLimitToolsShare, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await dispatchToolsShare({
+        uid: req.user!.uid,
+        devices: body.devices ?? body.device,
+        tools: Array.isArray(body.tools) ? body.tools : [],
+        other: typeof body.other === 'string' ? body.other : '',
+      });
+
+      if (!result.ok) {
+        return res.status(502).json({
+          ok: false,
+          error: "Couldn't share your anonymous tool list right now. Your profile is still saved to your account.",
+        });
+      }
+
+      recordToolsShareSuccess(req.user!.uid);
+      return res.json({
+        ok: true,
+        anonId: result.anonId,
+      });
+    } catch (err: any) {
+      return res.status(502).json({
+        ok: false,
+        error: "Couldn't share your anonymous tool list right now. Your profile is still saved to your account.",
+      });
+    }
+  });
 
   // Knowledge details (validated against product registry)
-  app.get('/api/knowledge/:product', requireUser, (req, res) => {
+  app.get('/api/knowledge/:product', (req, res) => {
     const p = req.params.product;
     if (!isKnownProduct(p)) {
       return res.status(400).json({ error: `Unknown product "${p}".` });
@@ -266,7 +324,7 @@ async function startServer() {
   });
 
   // Guided apps (validated against product registry)
-  app.get('/api/apps/:product', requireUser, (req, res) => {
+  app.get('/api/apps/:product', (req, res) => {
     const p = req.params.product;
     if (!isKnownProduct(p)) {
       return res.status(400).json({ error: `Unknown product "${p}".` });
@@ -276,7 +334,7 @@ async function startServer() {
   });
 
   // Admin Dashboard Data (requires Google sign-in + email in ADMIN_EMAILS)
-  app.use('/api/admin', requireUser, requireAdmin);
+  app.use('/api/admin', requireAdmin);
 
   app.get('/api/admin/data', async (_req, res) => {
     // Refresh health status

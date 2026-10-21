@@ -7,7 +7,20 @@ import {
   ScreenStreamer,
   hasScreenVisiblyChanged,
 } from './screen-share.js';
-import { getIdToken, authFetch, ProgressSummaryDoc } from './firebase.js';
+import {
+  getIdToken,
+  authFetch,
+  ProgressSummaryDoc,
+  StoredRoutineStep,
+  StepEvidence,
+  CompletedStepRecord,
+  RoutineProgressDoc,
+  ToolsProfileDoc,
+  UserToolEntry,
+  TaskContractFields,
+  UserProjectDoc,
+  StoredContractCard,
+} from './firebase.js';
 
 export interface RoutineState {
   activeRoutineId: string | null;
@@ -26,16 +39,28 @@ export interface ChatMessage {
     title: string;
     goal: string;
     activeStep?: number;
-    steps: Array<{ number: number; title: string; detail: string; completed?: boolean; coachPrompt?: string }>;
+    steps: StoredRoutineStep[];
   };
   reportCard?: {
     goal: string;
     tried: string;
     blocker: string;
+    sentRefId?: string;
   };
+  contractCard?: StoredContractCard;
   toolNotice?: string;
   bookingUrl?: string;
   retryText?: string;
+  undoToolsProfileSnapshot?: ToolsProfileDoc | null;
+  undoApplied?: boolean;
+  openToolsAction?: boolean;
+}
+
+export interface ToolsProfilePatch {
+  add?: UserToolEntry[];
+  remove?: string[];
+  devices?: string[];
+  otherAdded?: string[];
 }
 
 export interface LiveClientConfig {
@@ -45,6 +70,8 @@ export interface LiveClientConfig {
   userTimezone: string;
   progressSummary?: ProgressSummaryDoc | null;
   sessionNotes?: string[];
+  toolsProfile?: ToolsProfileDoc | null;
+  userProjects?: Record<string, UserProjectDoc>;
   context?: any;
   onTranscriptUpdate: (messages: ChatMessage[]) => void;
   onLiveStateChange: (state: {
@@ -61,10 +88,23 @@ export interface LiveClientConfig {
   onScreenFrameUpdate?: (frameBase64: string | null) => void;
   onUserMessageTurn?: () => void;
   onRoutineCompleted?: (appId: string) => void;
+  onRoutineProgressUpdated?: (
+    appId: string,
+    progress: {
+      status: 'not-started' | 'in-progress' | 'done';
+      completedSteps: CompletedStepRecord[];
+      activeStep: number;
+    }
+  ) => void;
+  onToolsProfileUpdated?: (
+    patch: ToolsProfilePatch
+  ) => Promise<{ summaryLine: string; undoSnapshot: ToolsProfileDoc } | null>;
+  onContractSaved?: (card: StoredContractCard) => Promise<UserProjectDoc | null>;
 }
 
 const MIN_FRAME_INTERVAL_MS = 3000; // At most 1 frame every 3 seconds in voice mode
 const CONNECT_TIMEOUT_MS = 15000; // 15-second timeout waiting for { connected: true }
+const VOICE_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5-minute voice idle timeout
 
 export class CalmGuideLiveClient {
   private config: LiveClientConfig;
@@ -73,6 +113,7 @@ export class CalmGuideLiveClient {
   private micStream: MediaStream | null = null;
   private micWorklet: MicWorkletController | null = null;
   private connectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private voiceIdleTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   private screenStreamer: ScreenStreamer | null = null;
   private latestScreenFrame: string | null = null;
@@ -104,8 +145,46 @@ export class CalmGuideLiveClient {
     return this.noteSavedInRoutine;
   }
 
+  public markReportCardSent(messageId: string, sentRefId: string) {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx !== -1 && this.messages[idx].reportCard) {
+      this.messages[idx] = {
+        ...this.messages[idx],
+        reportCard: {
+          ...this.messages[idx].reportCard!,
+          sentRefId,
+        },
+      };
+      this.config.onTranscriptUpdate([...this.messages]);
+    }
+  }
+
+  public markToolsUndoApplied(messageId: string) {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx !== -1) {
+      this.messages[idx] = {
+        ...this.messages[idx],
+        undoApplied: true,
+      };
+      this.config.onTranscriptUpdate([...this.messages]);
+      this.pushLiveContextRefresh(false, true);
+    }
+  }
+
+  public updateContractCardInMessage(messageId: string, nextCard: StoredContractCard) {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx !== -1) {
+      this.messages[idx] = {
+        ...this.messages[idx],
+        contractCard: nextCard,
+      };
+      this.config.onTranscriptUpdate([...this.messages]);
+      this.pushLiveContextRefresh(false, false, true);
+    }
+  }
+
   /**
-   * Updates client configuration (user, product, progressSummary, sessionNotes)
+   * Updates client configuration (user, product, progressSummary, sessionNotes, toolsProfile)
    * without recreating the client, wiping messages, or dropping an active voice session.
    */
   public updateConfig(partial: Partial<LiveClientConfig>) {
@@ -167,6 +246,8 @@ export class CalmGuideLiveClient {
       routineState: this.getRoutineState(),
       progressSummary: this.config.progressSummary || null,
       sessionNotes: this.config.sessionNotes || [],
+      toolsProfile: this.config.toolsProfile || null,
+      userProjects: this.config.userProjects || {},
       recentTranscript: this.messages
         .filter(m => m.role === 'user' || m.role === 'guide')
         .slice(-20)
@@ -175,7 +256,11 @@ export class CalmGuideLiveClient {
     };
   }
 
-  private pushLiveContextRefresh(includeRoutineTurnUpdate: boolean = false) {
+  public pushLiveContextRefresh(
+    includeRoutineTurnUpdate: boolean = false,
+    toolsProfileUpdated: boolean = false,
+    userProjectsUpdated: boolean = false
+  ) {
     if (this.isLiveActive && this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         const ctx = this.buildContextPayload();
@@ -184,6 +269,8 @@ export class CalmGuideLiveClient {
             type: 'context',
             context: ctx,
             routineState: includeRoutineTurnUpdate ? ctx.routineState : undefined,
+            toolsProfileUpdated: toolsProfileUpdated || undefined,
+            userProjectsUpdated: userProjectsUpdated || undefined,
           })
         );
       } catch (_) {}
@@ -264,6 +351,27 @@ export class CalmGuideLiveClient {
       clearTimeout(this.connectTimeoutId);
       this.connectTimeoutId = null;
     }
+  }
+
+  private clearVoiceIdleTimeout() {
+    if (this.voiceIdleTimeoutId) {
+      clearTimeout(this.voiceIdleTimeoutId);
+      this.voiceIdleTimeoutId = null;
+    }
+  }
+
+  private resetVoiceIdleTimeout() {
+    this.clearVoiceIdleTimeout();
+    if (!this.isLiveActive) return;
+    this.voiceIdleTimeoutId = setTimeout(() => {
+      if (this.isLiveActive) {
+        this.stopLiveSession();
+        this.addMessage(
+          'system',
+          "I paused voice since it's been quiet for a while. Press Start Voice Chat whenever you want to talk again."
+        );
+      }
+    }, VOICE_IDLE_TIMEOUT_MS);
   }
 
   /**
@@ -439,6 +547,7 @@ export class CalmGuideLiveClient {
           this.isListening = true;
           this.currentError = null;
           this.updateState();
+          this.resetVoiceIdleTimeout();
 
           // Send current screen frame once when voice session reconnects
           if (this.latestScreenFrame) {
@@ -462,6 +571,7 @@ export class CalmGuideLiveClient {
         this.isListening = true;
         this.currentError = null;
         this.updateState();
+        this.resetVoiceIdleTimeout();
         this.startMicStreaming();
 
         // Send current screen frame once when a voice session starts
@@ -542,6 +652,8 @@ export class CalmGuideLiveClient {
   private appendUserLiveText(textChunk: string) {
     if (!textChunk) return;
 
+    this.resetVoiceIdleTimeout();
+
     const isFirstChunkOfTurn = !this.currentUserMessageId;
     this.currentUserTurnText += textChunk;
     const displayText = this.currentUserTurnText.trim() || textChunk;
@@ -609,8 +721,47 @@ export class CalmGuideLiveClient {
     }
   }
 
+  private extractDevicesFromText(rawText?: string): string[] {
+    if (!rawText || typeof rawText !== 'string') return [];
+    const lower = rawText.toLowerCase();
+    const detected: string[] = [];
+    if (/\b(website|web|browser|muse\.ai|computer|laptop|desktop)\b/.test(lower) && !/\bmac app\b/.test(lower)) {
+      detected.push('Website');
+    }
+    if (/\b(iphone|ios|ipad)\b/.test(lower)) {
+      detected.push('iPhone');
+    }
+    if (/\bandroid\b/.test(lower)) {
+      detected.push('Android');
+    }
+    if (/\b(mac app|macbook|imac|macos|mac)\b/.test(lower)) {
+      detected.push('Mac app');
+    }
+    if (/\bwhatsapp\b/.test(lower)) {
+      detected.push('WhatsApp');
+    }
+    return detected;
+  }
+
+  private async applyToolsProfilePatch(patch: ToolsProfilePatch) {
+    if (!this.config.onToolsProfileUpdated) return;
+    try {
+      const outcome = await this.config.onToolsProfileUpdated(patch);
+      if (outcome && outcome.summaryLine) {
+        this.addMessage('system', outcome.summaryLine, {
+          undoToolsProfileSnapshot: outcome.undoSnapshot,
+        });
+        this.pushLiveContextRefresh(false, true);
+      }
+    } catch (err) {
+      console.warn('Failed to apply tools profile patch:', err);
+    }
+  }
+
   private handleToolCalls(toolCall: any, executedResponses?: any[]) {
     const calls = toolCall.functionCalls || [];
+    const hasExplicitToolsUpdate = calls.some((c: any) => c.name === 'update_tools_profile');
+
     for (const call of calls) {
       const { name, args } = call;
 
@@ -630,14 +781,52 @@ export class CalmGuideLiveClient {
         const appId = args?.app_id;
         this.config.onAppLaunched(appId);
         this.addMessage('system', `Launched guided routine: ${appId}`);
-      } else if (name === 'update_routine_progress') {
+      } else if (name === 'confirm_step' || name === 'update_routine_progress') {
         const appId = args?.app_id;
-        const completedStep = Number(args?.completed_step);
-        const nextStep = args?.next_step !== undefined ? Number(args?.next_step) : null;
-        this.updateRoutineCardProgress(appId, completedStep, nextStep);
+        const stepNum = Number(args?.step ?? args?.completed_step ?? 1);
+        const evidence: StepEvidence =
+          name === 'confirm_step' && args?.evidence === 'screen' ? 'screen' : 'user';
+        const note = typeof args?.note === 'string' ? args.note.trim() : undefined;
+        const nextStep =
+          args?.next_step !== undefined && args?.next_step !== null
+            ? Number(args?.next_step)
+            : null;
+        this.confirmRoutineStep(appId, stepNum, evidence, note, nextStep);
+
+        // Getting Started step 1 (device) should also save the device to tools profile
+        if (!hasExplicitToolsUpdate && appId === 'getting-started' && stepNum === 1) {
+          const lastUserMsg = [...this.messages].reverse().find(m => m.role === 'user')?.text || '';
+          const devices = this.extractDevicesFromText(`${note || ''} ${lastUserMsg}`);
+          if (devices.length > 0) {
+            this.applyToolsProfilePatch({ devices });
+          }
+        }
+      } else if (name === 'update_tools_profile') {
+        const res = executedResponses?.find(r => r.name === 'update_tools_profile')?.response?.result;
+        const patch: ToolsProfilePatch = {
+          add: Array.isArray(res?.add) ? res.add : Array.isArray(args?.add) ? args.add : [],
+          remove: Array.isArray(res?.remove)
+            ? res.remove
+            : Array.isArray(args?.remove)
+            ? args.remove
+            : [],
+          devices: Array.isArray(res?.devices)
+            ? res.devices
+            : Array.isArray(args?.devices)
+            ? args.devices
+            : [],
+          otherAdded: Array.isArray(res?.otherAdded) ? res.otherAdded : [],
+        };
+        this.applyToolsProfilePatch(patch);
       } else if (name === 'save_session_note') {
         const text = args?.text || '';
-        this.config.onNoteSaved(text);
+        Promise.resolve(this.config.onNoteSaved(text))
+          .then((ok) => {
+            if (ok !== false) {
+              this.noteSavedInRoutine = true;
+            }
+          })
+          .catch(() => {});
         this.addMessage('system', `Saved note: "${text}"`);
       } else if (name === 'get_booking_link') {
         const res = executedResponses?.find(r => r.name === 'get_booking_link')?.response?.result;
@@ -650,19 +839,127 @@ export class CalmGuideLiveClient {
         const goal = args?.goal || '';
         const tried = args?.tried || '';
         const blocker = args?.blocker || args?.summary || '';
-        this.addMessage(
-          'guide',
-          "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly.",
-          {
-            source: this.isLiveActive ? 'spoken' : 'typed',
-            reportCard: {
-              goal,
-              tried,
-              blocker,
-            },
+        const reportCard = { goal, tried, blocker };
+
+        // In voice mode, attach reportCard to the guide's current spoken bubble (or add card with empty text)
+        if (this.isLiveActive) {
+          let targetIdx = -1;
+          if (this.currentGuideMessageId) {
+            targetIdx = this.messages.findIndex(m => m.id === this.currentGuideMessageId);
           }
-        );
+          if (targetIdx !== -1) {
+            this.messages[targetIdx] = {
+              ...this.messages[targetIdx],
+              reportCard,
+            };
+            this.config.onTranscriptUpdate([...this.messages]);
+          } else {
+            const msg = this.addMessage('guide', '', {
+              source: 'spoken',
+              reportCard,
+            });
+            this.currentGuideMessageId = msg.id;
+          }
+        } else {
+          this.addMessage(
+            'guide',
+            "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly.",
+            {
+              source: 'typed',
+              reportCard,
+            }
+          );
+        }
+      } else if (name === 'save_task_contract') {
+        const res = executedResponses?.find(r => r.name === 'save_task_contract')?.response?.result;
+        const contractCard = this.buildStoredContractCard(args, res);
+        this.attachAndPersistContractCard(contractCard, this.isLiveActive);
       }
+    }
+  }
+
+  private buildStoredContractCard(args: any, res: any): StoredContractCard {
+    const projectId = String(res?.project_id || args?.project_id || 'first-task').trim();
+    const title = String(res?.title || args?.title || projectId).trim();
+    const rawContract = res?.contract || args || {};
+    const contract: TaskContractFields = {
+      goal: String(rawContract.goal ?? args?.goal ?? '').trim(),
+      do: String(rawContract.do ?? args?.do ?? '').trim(),
+      do_not: String(rawContract.do_not ?? args?.do_not ?? '').trim(),
+      ask_me_before: String(rawContract.ask_me_before ?? args?.ask_me_before ?? '').trim(),
+      report_back: String(rawContract.report_back ?? args?.report_back ?? '').trim(),
+      stop_if: String(rawContract.stop_if ?? args?.stop_if ?? '').trim(),
+    };
+    const rungNum = Number(res?.rung ?? args?.rung ?? 1);
+    const rung: 0 | 1 | 2 | 3 =
+      rungNum <= 0 ? 0 : rungNum === 1 ? 1 : rungNum === 2 ? 2 : 3;
+    const rungName = String(res?.rungName || `Rung ${rung}`).trim();
+    const rungText = res?.rungText ? String(res.rungText) : undefined;
+    let ladder: Array<{ rung: number; name: string; text: string }> | undefined;
+    if (Array.isArray(res?.ladder)) {
+      ladder = res.ladder;
+    } else if (res?.ladder && typeof res.ladder === 'object') {
+      ladder = [0, 1, 2, 3].map(r => {
+        const raw = String(res.ladder[String(r)] || '');
+        const match = raw.match(/^([^—–-]+)[—–-]\s*(.+)$/);
+        return {
+          rung: r,
+          name: match ? match[1].trim() : `Rung ${r}`,
+          text: match ? match[2].trim() : raw,
+        };
+      });
+    }
+
+    return {
+      projectId,
+      title,
+      contract,
+      rung,
+      rungName,
+      rungText,
+      ladder,
+      saved: true,
+    };
+  }
+
+  private attachAndPersistContractCard(contractCard: StoredContractCard, isVoiceMode: boolean) {
+    if (this.config.onContractSaved) {
+      Promise.resolve(this.config.onContractSaved(contractCard))
+        .then(() => {
+          this.pushLiveContextRefresh(false, false, true);
+        })
+        .catch((err) => {
+          console.warn('Failed to save contract from tool call:', err);
+        });
+    }
+
+    if (isVoiceMode) {
+      let targetIdx = -1;
+      if (this.currentGuideMessageId) {
+        targetIdx = this.messages.findIndex(m => m.id === this.currentGuideMessageId);
+      }
+      if (targetIdx !== -1) {
+        this.messages[targetIdx] = {
+          ...this.messages[targetIdx],
+          contractCard,
+        };
+        this.config.onTranscriptUpdate([...this.messages]);
+      } else {
+        const msg = this.addMessage('guide', '', {
+          source: 'spoken',
+          contractCard,
+        });
+        this.currentGuideMessageId = msg.id;
+      }
+    } else {
+      this.addMessage(
+        'guide',
+        `I've put together your task contract for ${contractCard.title} at Rung ${contractCard.rung} (${contractCard.rungName}) below. You can tweak any field, save it to My projects, or copy the instructions for Muse.`,
+        {
+          source: 'typed',
+          contractCard,
+        }
+      );
     }
   }
 
@@ -778,6 +1075,7 @@ export class CalmGuideLiveClient {
   public async sendTextMessage(text: string): Promise<void> {
     if (!text.trim()) return;
 
+    this.resetVoiceIdleTimeout();
     this.finalizeCurrentTurnBubbles();
     this.addMessage('user', text, { source: 'typed' });
     this.config.onUserMessageTurn?.();
@@ -811,6 +1109,8 @@ export class CalmGuideLiveClient {
           routineState: this.getRoutineState(),
           progressSummary: this.config.progressSummary || null,
           sessionNotes: this.config.sessionNotes || [],
+          toolsProfile: this.config.toolsProfile || null,
+          userProjects: this.config.userProjects || {},
         }),
       });
 
@@ -843,32 +1143,103 @@ export class CalmGuideLiveClient {
           }
         : undefined;
 
+      const contractInvocation = data.toolInvocations?.find((ti: any) => ti.name === 'save_task_contract');
+      const contractCardData = contractInvocation
+        ? this.buildStoredContractCard(contractInvocation.args, contractInvocation.result)
+        : undefined;
+
       if (data.reply) {
+        this.addMessage('guide', data.reply, {
+          source: 'typed',
+          ...(reportCardData ? { reportCard: reportCardData } : {}),
+          ...(contractCardData ? { contractCard: contractCardData } : {}),
+        });
+      } else if (reportCardData || contractCardData) {
         this.addMessage(
           'guide',
-          data.reply,
-          reportCardData ? { source: 'typed', reportCard: reportCardData } : { source: 'typed' }
-        );
-      } else if (reportCardData) {
-        this.addMessage(
-          'guide',
-          "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly.",
-          { source: 'typed', reportCard: reportCardData }
+          reportCardData
+            ? "I've drafted a short note for Nic below. Have a look, change anything you like, and press Send if it looks right. You can also book a time directly."
+            : `I've put together your task contract for ${contractCardData?.title || 'your project'} below.`,
+          {
+            source: 'typed',
+            ...(reportCardData ? { reportCard: reportCardData } : {}),
+            ...(contractCardData ? { contractCard: contractCardData } : {}),
+          }
         );
       }
 
       // Check for executed tools
       if (data.toolInvocations) {
+        const hasExplicitToolsUpdate = data.toolInvocations.some(
+          (ti: any) => ti.name === 'update_tools_profile'
+        );
+
         for (const ti of data.toolInvocations) {
           if (ti.name === 'launch_app') {
             this.config.onAppLaunched(ti.args?.app_id);
-          } else if (ti.name === 'update_routine_progress') {
-            const appId = ti.args?.app_id;
-            const completedStep = Number(ti.args?.completed_step);
-            const nextStep = ti.args?.next_step !== undefined ? Number(ti.args?.next_step) : null;
-            this.updateRoutineCardProgress(appId, completedStep, nextStep);
+          } else if (ti.name === 'confirm_step' || ti.name === 'update_routine_progress') {
+            const appId = ti.args?.app_id || ti.result?.app_id;
+            const stepNum = Number(
+              ti.args?.step ?? ti.args?.completed_step ?? ti.result?.step ?? 1
+            );
+            const evidence: StepEvidence =
+              ti.name === 'confirm_step' &&
+              (ti.args?.evidence === 'screen' || ti.result?.evidence === 'screen')
+                ? 'screen'
+                : 'user';
+            const note =
+              typeof ti.args?.note === 'string'
+                ? ti.args.note.trim()
+                : typeof ti.result?.note === 'string'
+                ? ti.result.note.trim()
+                : undefined;
+            const nextStep =
+              ti.args?.next_step !== undefined && ti.args?.next_step !== null
+                ? Number(ti.args.next_step)
+                : ti.result?.next_step !== undefined && ti.result?.next_step !== null
+                ? Number(ti.result.next_step)
+                : null;
+            this.confirmRoutineStep(appId, stepNum, evidence, note, nextStep);
+
+            // Getting Started step 1 (device) should also save the device to tools profile
+            if (!hasExplicitToolsUpdate && appId === 'getting-started' && stepNum === 1) {
+              const devices = this.extractDevicesFromText(`${note || ''} ${lastUserText}`);
+              if (devices.length > 0) {
+                await this.applyToolsProfilePatch({ devices });
+              }
+            }
+          } else if (ti.name === 'update_tools_profile') {
+            const res = ti.result || {};
+            const patch: ToolsProfilePatch = {
+              add: Array.isArray(res.add) ? res.add : Array.isArray(ti.args?.add) ? ti.args.add : [],
+              remove: Array.isArray(res.remove)
+                ? res.remove
+                : Array.isArray(ti.args?.remove)
+                ? ti.args.remove
+                : [],
+              devices: Array.isArray(res.devices)
+                ? res.devices
+                : Array.isArray(ti.args?.devices)
+                ? ti.args.devices
+                : [],
+              otherAdded: Array.isArray(res.otherAdded) ? res.otherAdded : [],
+            };
+            await this.applyToolsProfilePatch(patch);
+          } else if (ti.name === 'save_task_contract') {
+            const cardToSave =
+              contractCardData || this.buildStoredContractCard(ti.args, ti.result);
+            if (this.config.onContractSaved) {
+              try {
+                await this.config.onContractSaved(cardToSave);
+              } catch (err) {
+                console.warn('Failed to persist task contract:', err);
+              }
+            }
           } else if (ti.name === 'save_session_note') {
-            this.config.onNoteSaved(ti.args?.text);
+            const savedOk = await this.config.onNoteSaved(ti.args?.text);
+            if (savedOk !== false) {
+              this.noteSavedInRoutine = true;
+            }
           } else if (ti.name === 'request_screenshare') {
             const reason = ti.args?.reason || 'Let me see your screen.';
             this.config.onRequestScreenshareConsent(
@@ -876,6 +1247,10 @@ export class CalmGuideLiveClient {
               () => this.startScreenShare(),
               () => this.addMessage('system', 'Screen sharing was declined by you.')
             );
+          } else if (ti.name === 'stop_screenshare') {
+            this.stopScreenShare();
+            this.config.onStopScreenshareRequested();
+            this.addMessage('system', 'Screen sharing ended by guide.');
           } else if (ti.name === 'get_booking_link' && ti.result?.bookingUrl) {
             this.addMessage('system', "Nic's Booking Page is ready:", {
               bookingUrl: ti.result.bookingUrl,
@@ -892,72 +1267,175 @@ export class CalmGuideLiveClient {
     }
   }
 
-  public updateRoutineCardProgress(appId: string | undefined, completedStep: number, nextStep: number | null) {
-    let updated = false;
+  private emitRoutineProgressFromCard(card: NonNullable<ChatMessage['appCard']>) {
+    if (!this.config.onRoutineProgressUpdated || !card.appId) return;
+    const nowIso = new Date().toISOString();
+    const completedSteps: CompletedStepRecord[] = card.steps
+      .filter(s => Boolean(s.completed))
+      .map(s => ({
+        step: Number(s.number),
+        evidence: s.evidence || 'self',
+        note: s.note,
+        at: s.at || nowIso,
+      }));
+    const isAllDone = card.steps.length > 0 && completedSteps.length === card.steps.length;
+    const status: 'not-started' | 'in-progress' | 'done' = isAllDone
+      ? 'done'
+      : 'in-progress';
+    const activeStep = card.activeStep || 1;
+
+    this.config.onRoutineProgressUpdated(card.appId, {
+      status,
+      completedSteps,
+      activeStep,
+    });
+  }
+
+  public confirmRoutineStep(
+    appId: string | undefined,
+    stepNum: number,
+    evidence: StepEvidence = 'user',
+    note?: string,
+    explicitNextStep: number | null = null
+  ) {
+    let updatedCard: NonNullable<ChatMessage['appCard']> | null = null;
     let newlyCompletedAppId: string | null = null;
+    const nowIso = new Date().toISOString();
 
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (msg.appCard && (!appId || msg.appCard.appId === appId)) {
-        const wasAllDone = msg.appCard.steps.length > 0 && msg.appCard.steps.every(s => s.completed);
+        const wasAllDone =
+          msg.appCard.steps.length > 0 && msg.appCard.steps.every(s => s.completed);
         const steps = msg.appCard.steps.map(s => {
-          if (s.number === completedStep) {
-            return { ...s, completed: true };
+          if (s.number === stepNum) {
+            return {
+              ...s,
+              completed: true,
+              evidence,
+              note: note || s.note,
+              at: nowIso,
+            };
           }
           return s;
         });
+
         const isNowAllDone = steps.length > 0 && steps.every(s => s.completed);
-        const activeStep = nextStep !== null && nextStep !== undefined ? nextStep : completedStep;
+
+        let nextActive = stepNum;
+        if (explicitNextStep !== null && explicitNextStep !== undefined && explicitNextStep > 0) {
+          nextActive = explicitNextStep;
+        } else {
+          const nextUncompletedAfter = steps.find(s => !s.completed && s.number > stepNum);
+          const anyUncompleted = steps.find(s => !s.completed);
+          if (nextUncompletedAfter) {
+            nextActive = nextUncompletedAfter.number;
+          } else if (anyUncompleted) {
+            nextActive = anyUncompleted.number;
+          } else {
+            nextActive = steps.length > 0 ? steps[steps.length - 1].number : stepNum;
+          }
+        }
+
         msg.appCard = {
           ...msg.appCard,
           steps,
-          activeStep,
+          activeStep: nextActive,
         };
-        updated = true;
+        updatedCard = msg.appCard;
         if (!wasAllDone && isNowAllDone) {
           newlyCompletedAppId = msg.appCard.appId;
         }
         break;
       }
     }
-    if (updated) {
+
+    if (updatedCard) {
       this.config.onTranscriptUpdate([...this.messages]);
       this.pushLiveContextRefresh(true);
+      this.emitRoutineProgressFromCard(updatedCard);
       if (newlyCompletedAppId) {
         this.config.onRoutineCompleted?.(newlyCompletedAppId);
       }
     }
   }
 
+  public updateRoutineCardProgress(
+    appId: string | undefined,
+    completedStep: number,
+    nextStep: number | null
+  ) {
+    this.confirmRoutineStep(appId, completedStep, 'user', undefined, nextStep);
+  }
+
   public toggleRoutineStep(appId: string, stepNumber: number, isDone: boolean) {
+    let updatedCard: NonNullable<ChatMessage['appCard']> | null = null;
     let newlyCompletedAppId: string | null = null;
+    const nowIso = new Date().toISOString();
 
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (msg.appCard && (!appId || msg.appCard.appId === appId)) {
-        const wasAllDone = msg.appCard.steps.length > 0 && msg.appCard.steps.every(s => s.completed);
-        const steps = msg.appCard.steps.map(s =>
-          s.number === stepNumber ? { ...s, completed: isDone } : s
-        );
+        const wasAllDone =
+          msg.appCard.steps.length > 0 && msg.appCard.steps.every(s => s.completed);
+        const steps = msg.appCard.steps.map(s => {
+          if (s.number === stepNumber) {
+            if (isDone) {
+              return {
+                ...s,
+                completed: true,
+                evidence: 'self' as StepEvidence,
+                at: nowIso,
+              };
+            } else {
+              return {
+                ...s,
+                completed: false,
+                evidence: undefined,
+                note: undefined,
+                at: undefined,
+              };
+            }
+          }
+          return s;
+        });
+
         const isNowAllDone = steps.length > 0 && steps.every(s => s.completed);
+        let activeStep = msg.appCard.activeStep || 1;
+        if (isDone && activeStep === stepNumber) {
+          const nextUncompleted =
+            steps.find(s => !s.completed && s.number > stepNumber) ||
+            steps.find(s => !s.completed);
+          if (nextUncompleted) {
+            activeStep = nextUncompleted.number;
+          }
+        }
+
         msg.appCard = {
           ...msg.appCard,
           steps,
+          activeStep,
         };
+        updatedCard = msg.appCard;
         if (!wasAllDone && isNowAllDone) {
           newlyCompletedAppId = msg.appCard.appId;
         }
         break;
       }
     }
-    this.config.onTranscriptUpdate([...this.messages]);
-    this.pushLiveContextRefresh(true);
-    if (newlyCompletedAppId) {
-      this.config.onRoutineCompleted?.(newlyCompletedAppId);
+
+    if (updatedCard) {
+      this.config.onTranscriptUpdate([...this.messages]);
+      this.pushLiveContextRefresh(true);
+      this.emitRoutineProgressFromCard(updatedCard);
+      if (newlyCompletedAppId) {
+        this.config.onRoutineCompleted?.(newlyCompletedAppId);
+      }
     }
   }
 
   public setRoutineActiveStep(appId: string, stepNumber: number) {
+    let updatedCard: NonNullable<ChatMessage['appCard']> | null = null;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const msg = this.messages[i];
       if (msg.appCard && (!appId || msg.appCard.appId === appId)) {
@@ -965,44 +1443,140 @@ export class CalmGuideLiveClient {
           ...msg.appCard,
           activeStep: stepNumber,
         };
+        updatedCard = msg.appCard;
         break;
       }
     }
-    this.config.onTranscriptUpdate([...this.messages]);
-    this.pushLiveContextRefresh(true);
+    if (updatedCard) {
+      this.config.onTranscriptUpdate([...this.messages]);
+      this.pushLiveContextRefresh(true);
+      this.emitRoutineProgressFromCard(updatedCard);
+    }
   }
 
-  public async startGuidedRoutine(app: any): Promise<void> {
-    this.noteSavedInRoutine = false;
-    const firstStep = app.steps && app.steps.length > 0 ? app.steps[0] : null;
-    const firstStepPrompt = firstStep?.coachPrompt || firstStep?.detail || '';
+  public buildAppCardWithRestoredProgress(
+    app: any,
+    existingProgress?: RoutineProgressDoc | null
+  ): {
+    appCard: NonNullable<ChatMessage['appCard']>;
+    isResumingInProgress: boolean;
+    restoredStepNumber: number;
+  } {
+    const isResumingInProgress = Boolean(
+      existingProgress &&
+        existingProgress.status === 'in-progress' &&
+        (existingProgress.completedSteps.length > 0 || existingProgress.activeStep > 1)
+    );
 
-    // 1. Add interactive appCard to transcript
-    this.addMessage('guide', `Starting the "${app.title}" routine with you. Let's take it one step at a time:`, {
+    const completedMap = new Map<number, CompletedStepRecord>();
+    if (isResumingInProgress && existingProgress) {
+      for (const cs of existingProgress.completedSteps) {
+        completedMap.set(Number(cs.step), cs);
+      }
+    }
+
+    const steps: StoredRoutineStep[] = (Array.isArray(app.steps) ? app.steps : []).map(
+      (s: any) => {
+        const num = Number(s.number || 1);
+        const saved = completedMap.get(num);
+        return {
+          ...s,
+          number: num,
+          title: s.title || `Step ${num}`,
+          detail: s.detail || s.why || '',
+          coach: s.coach || s.coachPrompt || '',
+          coachPrompt: s.coach || s.coachPrompt || '',
+          why: s.why || s.detail || '',
+          where: s.where,
+          done_when: s.done_when,
+          verify: s.verify,
+          if_stuck: s.if_stuck,
+          safety: s.safety,
+          area: s.area,
+          rating: s.rating,
+          completed: Boolean(saved),
+          evidence: saved?.evidence,
+          note: saved?.note,
+          at: saved?.at,
+        };
+      }
+    );
+
+    let restoredStepNumber = 1;
+    if (isResumingInProgress && existingProgress) {
+      const candidate = existingProgress.activeStep || 1;
+      const candidateStep = steps.find(s => s.number === candidate);
+      if (candidateStep && !candidateStep.completed) {
+        restoredStepNumber = candidate;
+      } else {
+        const firstUncompleted = steps.find(s => !s.completed);
+        restoredStepNumber = firstUncompleted ? firstUncompleted.number : candidate;
+      }
+    }
+
+    const appCard: NonNullable<ChatMessage['appCard']> = {
+      appId: app.id,
+      title: app.title,
+      goal: app.goal || app.summary || '',
+      activeStep: restoredStepNumber,
+      steps,
+    };
+
+    return {
+      appCard,
+      isResumingInProgress,
+      restoredStepNumber,
+    };
+  }
+
+  public async startGuidedRoutine(
+    app: any,
+    existingProgress?: RoutineProgressDoc | null
+  ): Promise<void> {
+    this.noteSavedInRoutine = false;
+    this.resetVoiceIdleTimeout();
+
+    const { appCard, isResumingInProgress, restoredStepNumber } =
+      this.buildAppCardWithRestoredProgress(app, existingProgress);
+
+    const activeStepObj =
+      (Array.isArray(app.steps)
+        ? app.steps.find((s: any) => s.number === restoredStepNumber)
+        : null) || (app.steps && app.steps.length > 0 ? app.steps[0] : null);
+    const activeStepPrompt =
+      activeStepObj?.coach || activeStepObj?.coachPrompt || activeStepObj?.detail || '';
+
+    const introText = isResumingInProgress
+      ? `You were on step ${restoredStepNumber} last time. Pick up there?`
+      : `Starting the "${app.title}" routine with you. Let's take it one step at a time:`;
+
+    // 1. Add interactive appCard to transcript and persist its in-progress state
+    this.addMessage('guide', introText, {
       source: 'typed',
-      appCard: {
-        appId: app.id,
-        title: app.title,
-        goal: app.goal,
-        activeStep: 1,
-        steps: app.steps.map((s: any) => ({ ...s, completed: false })),
-      },
+      appCard,
     });
+    this.emitRoutineProgressFromCard(appCard);
 
     // 2. Prepare user prompt and routine coaching directive
-    const userPromptText = `Please walk me through the "${app.title}" routine.`;
+    const userPromptText = isResumingInProgress
+      ? `Let's pick up the "${app.title}" routine at step ${restoredStepNumber}.`
+      : `Please walk me through the "${app.title}" routine.`;
+
     const directiveContext = `[Guided Routine Started: "${app.title}"]
 Goal: ${app.goal}
-Total Steps: ${app.steps.length}
-Active Step: Step 1 ("${firstStep?.title || 'Understand Intended Use'}" — ${firstStep?.detail || ''})
-Coach Inquiry for Step 1: "${firstStepPrompt}"
+Total Steps: ${app.steps?.length || 0}
+Active Step: Step ${restoredStepNumber} ("${activeStepObj?.title || ''}" — ${activeStepObj?.why || activeStepObj?.detail || ''})
+Coach Question for Step ${restoredStepNumber}: "${activeStepPrompt}"
 
 Agent Coaching Instructions:
-- The UI is already displaying the full stepped progress card to the user so they can see their progress.
+- The UI is already displaying the interactive routine card at Step ${restoredStepNumber}.
 - NEVER list out all the steps or dump a checklist into your response.
-- Welcome them warmly to the routine in ONE short, calming sentence.
-- Ask the inquiry for Step 1: "${firstStepPrompt}" to get their input.
-- Wait for the user to respond before proceeding to Step 2.`;
+- ${
+      isResumingInProgress
+        ? `Welcome them back to Step ${restoredStepNumber} ("${activeStepObj?.title || ''}") in one short sentence and ask its coach question: "${activeStepPrompt}".`
+        : `Welcome them warmly to the routine in ONE short, calming sentence and ask the coach question for Step 1: "${activeStepPrompt}".`
+    }
+- Wait for the user to respond before calling confirm_step.`;
 
     if (this.isLiveActive && this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.addMessage('user', userPromptText, { source: 'typed' });
@@ -1021,6 +1595,7 @@ Agent Coaching Instructions:
 
   public stopLiveSession(errorMessage?: string) {
     this.clearConnectTimeout();
+    this.clearVoiceIdleTimeout();
 
     if (this.micWorklet) {
       try {

@@ -6,6 +6,7 @@ export interface ReportForNicCardProps {
   initialGoal?: string;
   initialTried?: string;
   initialBlocker?: string;
+  initialSentRefId?: string;
   autoDraft?: boolean;
   product: string;
   productName?: string;
@@ -16,7 +17,7 @@ export interface ReportForNicCardProps {
   progressSummaryPayload?: any;
   bookingUrl: string;
   sheetWebhookConfigured: boolean;
-  onBeforeSendReport?: () => Promise<string | void>;
+  onBeforeSendReport?: () => Promise<string | void> | void;
   onSent?: (referenceId: string) => void;
 }
 
@@ -24,6 +25,7 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
   initialGoal = '',
   initialTried = '',
   initialBlocker = '',
+  initialSentRefId,
   autoDraft = false,
   product,
   productName = 'Meta Muse',
@@ -41,16 +43,22 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
   const [tried, setTried] = useState<string>(autoDraft ? '' : initialTried);
   const [blocker, setBlocker] = useState<string>(autoDraft ? '' : initialBlocker);
   const [includeTranscript, setIncludeTranscript] = useState<boolean>(true);
-  const [isDrafting, setIsDrafting] = useState<boolean>(Boolean(autoDraft));
+  const [isDrafting, setIsDrafting] = useState<boolean>(Boolean(autoDraft) && !initialSentRefId);
 
   const [isSending, setIsSending] = useState<boolean>(false);
-  const [sentRefId, setSentRefId] = useState<string | null>(null);
+  const [sentRefId, setSentRefId] = useState<string | null>(initialSentRefId || null);
   const [sendFailed, setSendFailed] = useState<boolean>(false);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
 
   const userEditedGoalRef = useRef<boolean>(false);
   const userEditedTriedRef = useRef<boolean>(false);
   const userEditedBlockerRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (initialSentRefId) {
+      setSentRefId(initialSentRefId);
+    }
+  }, [initialSentRefId]);
 
   useEffect(() => {
     if (!autoDraft) {
@@ -72,7 +80,7 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
 
   // When opened by the user (autoDraft = true), call POST /api/report/draft
   useEffect(() => {
-    if (!autoDraft) return;
+    if (!autoDraft || initialSentRefId) return;
 
     let cancelled = false;
     setIsDrafting(true);
@@ -115,7 +123,7 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [autoDraft, product]);
+  }, [autoDraft, product, initialSentRefId]);
 
   const handleSendReport = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -126,16 +134,7 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
     setRateLimitMessage(null);
 
     try {
-      let latestSummary = progressSummary;
-      if (onBeforeSendReport) {
-        try {
-          const updated = await onBeforeSendReport();
-          if (typeof updated === 'string' && updated.trim()) {
-            latestSummary = updated;
-          }
-        } catch (_) {}
-      }
-
+      // Don't block Send on summarizing: send with the current progressSummary and trigger a background summarize afterwards
       const res = await authFetch('/api/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -147,9 +146,13 @@ export const ReportForNicCard: React.FC<ReportForNicCardProps> = ({
           includeTranscript,
           transcript: includeTranscript ? transcript.slice(-20) : [],
           routineProgress,
-          progressSummary: latestSummary,
+          progressSummary,
         }),
       });
+
+      if (onBeforeSendReport) {
+        Promise.resolve(onBeforeSendReport()).catch(() => {});
+      }
 
       const data = await res.json().catch(() => ({}));
 
