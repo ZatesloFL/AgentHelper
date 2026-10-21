@@ -420,32 +420,32 @@ export async function handleTextChat(payload: {
 
       // If text response was empty because it only returned tool calls, generate a natural continuation
       if (!textReply.trim()) {
-        try {
-          const continuationResponse = await ai.models.generateContent({
-            model: activeTextModel,
-            contents: [
-              ...cleanedTurns,
-              {
-                role: 'model',
-                parts: functionCalls.map((fc: any) => ({ functionCall: fc })),
+        const candidateContent = response.candidates?.[0]?.content;
+        if (candidateContent) {
+          try {
+            const continuationResponse = await ai.models.generateContent({
+              model: activeTextModel,
+              contents: [
+                ...cleanedTurns,
+                candidateContent,
+                {
+                  role: 'user',
+                  parts: toolInvocations.map(ti => ({
+                    functionResponse: {
+                      name: ti.name,
+                      response: { result: ti.result },
+                    },
+                  })),
+                },
+              ],
+              config: {
+                systemInstruction,
               },
-              {
-                role: 'user',
-                parts: toolInvocations.map(ti => ({
-                  functionResponse: {
-                    name: ti.name,
-                    response: { result: ti.result },
-                  },
-                })),
-              },
-            ],
-            config: {
-              systemInstruction,
-            },
-          });
-          textReply = continuationResponse.text || '';
-        } catch (contErr) {
-          console.warn('Continuation generation after tool calls:', contErr);
+            });
+            textReply = continuationResponse.text || '';
+          } catch (contErr) {
+            console.warn('Continuation generation after tool calls:', contErr);
+          }
         }
       }
     }
