@@ -1,0 +1,11 @@
+{
+  "name": "Calm Guide for Meta Muse",
+  "description": "A calm, trustworthy personal AI companion and safety advisor for Meta Muse, offering voice, screen share guidance, guided apps, and escalation to Nic.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
