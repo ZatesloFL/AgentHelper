@@ -1,0 +1,114 @@
+{
+  "lastChecked": "2026-10-21",
+  "supportLevels": {
+    "connector": "Muse has a built-in connector for it [DOC or SEEN].",
+    "device": "Works through a paired device (Mac app or phone) [DOC].",
+    "custom": "No built-in connector known. Muse may be able to set up a custom connector if the service offers an API key or its own sign-in (OAuth) [DOC rule, INFERRED for this service].",
+    "browser": "No connector known. Muse could use its own browser with your login, which is broader access; discuss with the guide first [INFERRED].",
+    "reported": "Reported as an early addition by third parties, not confirmed in Muse's docs [WEB].",
+    "unknown": "Not confirmed either way [UNKNOWN]."
+  },
+  "categories": [
+    {
+      "id": "email",
+      "label": "Email",
+      "tools": [
+        { "id": "gmail", "name": "Gmail", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "outlook", "name": "Outlook / Microsoft 365 mail", "support": "connector", "evidence": "DOC", "note": "Listed as a connector in Muse's docs; not yet seen on screen." },
+        { "id": "icloud-mail", "name": "iCloud / Apple Mail", "support": "device", "evidence": "DOC", "note": "Through the Mac app's Mail access." },
+        { "id": "yahoo-mail", "name": "Yahoo Mail", "support": "unknown", "evidence": "UNKNOWN" },
+        { "id": "other-email", "name": "Other email", "support": "unknown", "evidence": "UNKNOWN" }
+      ]
+    },
+    {
+      "id": "calendar",
+      "label": "Calendar",
+      "tools": [
+        { "id": "google-calendar", "name": "Google Calendar", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "outlook-calendar", "name": "Outlook / Microsoft 365 calendar", "support": "unknown", "evidence": "UNKNOWN", "note": "The Outlook connector is documented; whether it includes calendar is not confirmed." },
+        { "id": "apple-calendar", "name": "Apple Calendar", "support": "device", "evidence": "DOC", "note": "Through the Mac app." }
+      ]
+    },
+    {
+      "id": "files",
+      "label": "Files & documents",
+      "tools": [
+        { "id": "google-drive", "name": "Google Drive / Docs", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "google-sheets", "name": "Google Sheets", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "onedrive", "name": "OneDrive / SharePoint", "support": "unknown", "evidence": "UNKNOWN" },
+        { "id": "dropbox", "name": "Dropbox", "support": "custom", "evidence": "INFERRED" },
+        { "id": "local-files", "name": "Files on my Mac", "support": "device", "evidence": "DOC", "note": "Mac app; Blocked folders can be set." }
+      ]
+    },
+    {
+      "id": "tasks",
+      "label": "Tasks & projects",
+      "tools": [
+        { "id": "notion", "name": "Notion", "support": "reported", "evidence": "WEB" },
+        { "id": "apple-reminders", "name": "Apple Reminders", "support": "device", "evidence": "DOC", "note": "iPhone pairing or Mac app." },
+        { "id": "todoist", "name": "Todoist", "support": "custom", "evidence": "INFERRED" },
+        { "id": "asana", "name": "Asana", "support": "custom", "evidence": "INFERRED" },
+        { "id": "trello", "name": "Trello", "support": "custom", "evidence": "INFERRED" },
+        { "id": "clickup", "name": "ClickUp", "support": "custom", "evidence": "INFERRED" },
+        { "id": "monday", "name": "monday.com", "support": "custom", "evidence": "INFERRED" },
+        { "id": "ms-todo", "name": "Microsoft To Do / Planner", "support": "unknown", "evidence": "UNKNOWN" }
+      ]
+    },
+    {
+      "id": "notes",
+      "label": "Notes & meetings",
+      "tools": [
+        { "id": "granola", "name": "Granola", "support": "reported", "evidence": "WEB" },
+        { "id": "apple-notes", "name": "Apple Notes", "support": "device", "evidence": "DOC", "note": "Through the Mac app." },
+        { "id": "onenote", "name": "OneNote", "support": "unknown", "evidence": "UNKNOWN" },
+        { "id": "evernote", "name": "Evernote", "support": "unknown", "evidence": "UNKNOWN" }
+      ]
+    },
+    {
+      "id": "messaging",
+      "label": "Chat & messaging",
+      "tools": [
+        { "id": "whatsapp", "name": "WhatsApp", "support": "connector", "evidence": "DOC", "note": "A channel to talk to Muse, not a way for Muse to message others." },
+        { "id": "messenger", "name": "Messenger", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "imessage", "name": "iMessage / Messages", "support": "device", "evidence": "DOC", "note": "Mac app; iPhone pairing can only draft texts." },
+        { "id": "android-sms", "name": "Android texts", "support": "device", "evidence": "DOC", "note": "Android pairing, if Muse is the default assistant." },
+        { "id": "slack", "name": "Slack", "support": "custom", "evidence": "INFERRED" },
+        { "id": "teams", "name": "Microsoft Teams", "support": "unknown", "evidence": "UNKNOWN" }
+      ]
+    },
+    {
+      "id": "social",
+      "label": "Social",
+      "tools": [
+        { "id": "facebook", "name": "Facebook", "support": "connector", "evidence": "DOC", "note": "Posts and comments always need approval." },
+        { "id": "instagram", "name": "Instagram", "support": "connector", "evidence": "DOC" },
+        { "id": "threads", "name": "Threads", "support": "connector", "evidence": "DOC", "note": "Posts and messages always need approval." }
+      ]
+    },
+    {
+      "id": "money",
+      "label": "Money & shopping",
+      "tools": [
+        { "id": "plaid", "name": "Bank accounts (via Plaid)", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "shopify", "name": "Shopify", "support": "connector", "evidence": "DOC" },
+        { "id": "amazon", "name": "Amazon", "support": "unknown", "evidence": "WEB", "note": "Amazon blocked Muse from shopping on Amazon.com in September 2026." }
+      ]
+    },
+    {
+      "id": "health",
+      "label": "Health & home",
+      "tools": [
+        { "id": "withings", "name": "Withings", "support": "connector", "evidence": "SEEN, DOC" },
+        { "id": "apple-health", "name": "Apple Health", "support": "device", "evidence": "DOC", "note": "iPhone pairing." },
+        { "id": "homekit", "name": "HomeKit", "support": "device", "evidence": "DOC", "note": "iPhone pairing." }
+      ]
+    },
+    {
+      "id": "media",
+      "label": "Music & media",
+      "tools": [
+        { "id": "spotify", "name": "Spotify", "support": "connector", "evidence": "DOC" }
+      ]
+    }
+  ]
+}

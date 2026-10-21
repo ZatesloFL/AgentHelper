@@ -1,21 +1,67 @@
-# Guided Flow: Weekly Review
+---
+id: weekly-review
+title: Ten-Minute Weekly Check
+type: checkup
+order: 2
+estimated_time: 10 minutes
+risk: low
+requires: []
+recommended_after: [getting-started]
+summary: A quick look at what changed since last time, using your last scorecard.
+goal: Catch anything that changed since the last check, keep permissions tight, and decide whether any project should move up or down a rung.
+---
 
-**App ID**: `weekly-review`
-**Title**: Ten-Minute Hygiene Check
-**Estimated Time**: 10 minutes
-**Goal**: Perform a routine weekly check-in to verify that permissions remain tight, memories are accurate, and no surprises occurred.
+## Step 1: What changed
+- area: connections
+- coach: "Let's start with what's new. Open Connectors > Connected. Anything there that wasn't there last time?"
+- where: Settings > Connectors > Connected
+- done_when: The user has compared connected services with the last scorecard and removed anything they no longer need.
+- verify: screen
+- why: New connections are the most common way access quietly grows.
+- rating: green if unchanged or changes were deliberate; amber if something appeared that the user didn't add.
 
-## Steps
-1. **Connected Apps Audit**: Review all currently connected apps and remove any that were only used for a one-off experiment.
-   - *Coach Question*: "Taking a look at your connected apps list, are there any apps or services you only needed once that we can disconnect today?"
-2. **Standing Permissions Check**: Review all "allow always" authorizations to ensure no broad write or purchase rights accumulated.
-   - *Coach Question*: "Let's check your standing approvals. Are there any 'allow always' rules that you'd feel more comfortable switching back to 'ask every time'?"
-3. **Saved Memory Verification**: Review the memories Muse has saved about you and delete any inaccurate or overly personal details.
-   - *Coach Question*: "What memories has Muse saved about your preferences or habits? Do you see anything outdated or too personal that we should clear?"
-4. **Recent Activity Log Review**: Scan the recent actions log to confirm Muse didn't take any unexpected or surprising actions.
-   - *Coach Question*: "Looking at the recent activity log from the past few days, did Muse do anything that felt unexpected or unclear?"
-5. **Calibrate or Escalate**: Tighten any rules that feel uncertain, or book time with Nic if you'd like a human review of your setup.
-   - *Coach Question*: "How confident do you feel with your current setup? Would you like to adjust any rules, or grab some time on Nic's calendar for a quick human check?"
+## Step 2: Permission counts
+- area: approvals
+- coach: "Open Permissions. Have the counts next to Connectors, Websites, Artifacts, or Scheduled tasks gone up since last time?"
+- where: Settings > Permissions
+- done_when: The user has compared the counts with last time and explained or revoked any increase.
+- verify: screen
+- why: A higher count means more things that no longer ask.
+- rating: green if unchanged or explained; amber if an increase can't be explained.
 
-## Completion
-Summarize the audit outcome in one calm paragraph and call `save_session_note`.
+## Step 3: Scheduled work and projects
+- area: scheduled
+- coach: "Open Upcoming. Is each task still useful? And for your projects, is the current rung still right?"
+- where: Status panel > Upcoming
+- done_when: Each task is kept, paused, or deleted, and each active project's rung is confirmed or changed.
+- verify: either
+- why: Tasks pile up, and the right rung changes as trust grows or shrinks.
+- rating: green if every task is wanted; amber if any task was forgotten.
+
+## Step 4: Spot-check one result
+- area: activity
+- coach: "Pick one thing Muse produced this week, a briefing, an agenda, or a digest, and check two items against the source. Was it right?"
+- done_when: The user has spot-checked at least one output and reported the result.
+- verify: user
+- why: You're the only person who sees your results, so you're the only quality check.
+- rating: green if accurate; amber if there were errors.
+
+## Step 5: Memory and activity
+- area: memory
+- coach: "Quick look at Identity > MEMORY and at Activity. Anything outdated, too personal, or unexpected?"
+- where: Status panel > Identity > MEMORY; Status panel > Activity
+- done_when: The user has glanced at both and removed or flagged anything.
+- verify: either
+- why: Memory grows on its own, and Activity shows what really happened.
+- rating: green if nothing surprising; amber if items were removed; red if anything unexpected was sent, bought, or shared.
+
+## Step 6: Adjust or escalate
+- coach: "How confident do you feel this week? Anything to tighten, or want Nic to take a look?"
+- done_when: The user has chosen to tighten something, keep things as they are, or send a report to Nic.
+- verify: user
+- why: A check-in is only useful if it ends in a decision.
+
+## Finish
+- summarize: Show this week's scorecard next to last week's, with changes highlighted, in one calm paragraph.
+- save_scorecard: Record each area's rating and a one-line reason.
+- next: If anything is red, offer the "Something went wrong" routine and Nic.
