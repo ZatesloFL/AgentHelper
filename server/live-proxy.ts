@@ -251,6 +251,9 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           contextWindowCompression: { slidingWindow: {} },
+          proactivity: {
+            proactiveAudio: true,
+          },
           sessionResumption: { handle: handleToUse },
           speechConfig: {
             voiceConfig: {
