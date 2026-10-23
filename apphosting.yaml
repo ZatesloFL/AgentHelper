@@ -1,0 +1,28 @@
+# Firebase App Hosting config for the Second Look guide app (AgentHelper).
+# Build: `bun run build` (vite -> dist/). Start: `bun run start` (tsx server.ts),
+# which serves dist/ when NODE_ENV=production and respects the PORT env var.
+# Secrets (GEMINI_API_KEY, SHEET_WEBHOOK_SECRET, etc.) are managed in the
+# Firebase console / Secret Manager, not in this file.
+
+runConfig:
+  concurrency: 80
+  cpu: 1
+  memoryMiB: 512
+  minInstances: 0
+  maxInstances: 4
+
+env:
+  - variable: NODE_ENV
+    value: production
+  - variable: LIVE_MODEL
+    value: gemini-3.8-live
+  - variable: TEXT_MODEL
+    value: gemini-3.8-flash
+  - variable: OWNER_NAME
+    value: Nic
+  - variable: OWNER_EMAIL
+    value: nic@zateslo.com
+  - variable: OWNER_TIMEZONE
+    value: America/New_York
+  - variable: ADMIN_EMAILS
+    value: nic@zateslo.com
