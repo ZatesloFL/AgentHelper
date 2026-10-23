@@ -1,3 +1,8 @@
+# NOTE: GEMINI_API_KEY is provided as a secret reference via the Firebase
+# console (App Hosting -> Settings -> Environment), backed by Secret Manager.
+# It is intentionally NOT stored in this file. After wiring a new secret in
+# the console, trigger a fresh rollout so the running revision picks it up.
+
 # Firebase App Hosting config for the Second Look guide app (AgentHelper).
 # Build: `bun run build` (vite -> dist/). Start: `bun run start` (tsx server.ts),
 # which serves dist/ when NODE_ENV=production and respects the PORT env var.
