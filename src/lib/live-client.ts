@@ -682,8 +682,8 @@ export class CalmGuideLiveClient {
     const displayText = this.currentUserTurnText.trim() || textChunk;
 
     if (isFirstChunkOfTurn) {
-      // Send latest screen frame right away when a new user speech turn starts (respecting 3s minimum)
-      this.maybeSendLiveScreenFrame({ forceChange: true, bypassCooldown: false });
+      // Send latest screen frame right away when a new user speech turn starts (bypass the 3s cooldown so the model sees what the user sees as they ask about it)
+      this.maybeSendLiveScreenFrame({ forceChange: true, bypassCooldown: true });
 
       const newMsg: ChatMessage = {
         id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
