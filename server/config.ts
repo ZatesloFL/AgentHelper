@@ -18,7 +18,7 @@ export interface AppConfig {
   port: number;
 }
 
-const defaultBookingUrl = process.env.BOOKING_URL || 'https://cal.com/zateslo/grab-some-human-time-with-nic';
+const defaultBookingUrl = process.env.BOOKING_URL || 'https://cal.com/zateslo/second-look-checkup';
 
 const parsedAdminEmails = (process.env.ADMIN_EMAILS || '')
   .split(',')
