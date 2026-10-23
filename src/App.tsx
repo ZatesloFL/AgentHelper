@@ -148,7 +148,7 @@ export default function App() {
 
   // Health, Handoff & Booking Config from Server
   const [liveAvailable, setLiveAvailable] = useState<boolean>(true);
-  const [bookingUrl, setBookingUrl] = useState<string>('https://cal.com/zateslo/grab-some-human-time-with-nic');
+  const [bookingUrl, setBookingUrl] = useState<string>('https://cal.com/zateslo/second-look-checkup');
   const [sheetWebhookConfigured, setSheetWebhookConfigured] = useState<boolean>(false);
 
   const currentProductObj = availableProducts.find(p => p.id === currentProduct);
