@@ -528,6 +528,8 @@ export default function App() {
       product: currentProductRef.current,
       productName: currentProductNameRef.current,
       userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York',
+      // Voice WS goes to the standalone Cloud Run service, not App Hosting (its edge 403s WS upgrades)
+      liveWsHost: 'secondlook-live-voice-1004814265359.us-east4.run.app',
       onTranscriptUpdate: (newMessages) => {
         setMessages(newMessages);
       },

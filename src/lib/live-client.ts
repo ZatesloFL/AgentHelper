@@ -73,6 +73,7 @@ export interface LiveClientConfig {
   product: string;
   productName?: string;
   userTimezone: string;
+  liveWsHost?: string; // Separate Cloud Run voice service host (App Hosting edge blocks WS upgrades); falls back to page host when unset
   progressSummary?: ProgressSummaryDoc | null;
   sessionNotes?: string[];
   toolsProfile?: ToolsProfileDoc | null;
@@ -453,7 +454,8 @@ export class CalmGuideLiveClient {
 
       // 3. Connect via server WebSocket bridge /api/live-ws (no user info in URL)
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/live-ws`;
+      const wsHost = this.config.liveWsHost || window.location.host;
+      const wsUrl = `${protocol}//${wsHost}/api/live-ws`;
 
       this.ws = new WebSocket(wsUrl);
 
