@@ -1,12 +1,12 @@
 {
-  "projectId": "sterling-510717",
-  "appId": "1:61831835615:web:7aa3f6431ae8d391cd1e6a",
-  "apiKey": "AIzaSyBbdXFH4wu7nSKWlos0fclzzJtp0qTGYrg",
-  "authDomain": "sterling-510717.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-4df508b3-b340-4de5-8c38-5efa47947ce2",
-  "storageBucket": "sterling-510717.firebasestorage.app",
-  "messagingSenderId": "61831835615",
+  "projectId": "secondlook-512814",
+  "appId": "1:1004814265359:web:3eb4f089e88c42d1a6077a",
+  "apiKey": "AIzaSyA8sYvzVsJFDd-VhIo_qJnqiReC2kZNSKc",
+  "authDomain": "secondlook-512814.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "secondlook-512814.firebasestorage.app",
+  "messagingSenderId": "1004814265359",
   "measurementId": "",
-  "oAuthClientId": "61831835615-5grrd3uu84gscjvpdvuvs3ckrbednvij.apps.googleusercontent.com",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }
