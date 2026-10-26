@@ -244,7 +244,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
       const openedWithHandle = Boolean(handleToUse);
       let sessionOpenedAt = Date.now();
 
-      const createdSession = await ai.live.connect({
+      const connectPromise = ai.live.connect({
         model: config.liveModel,
         config: {
           responseModalities: [Modality.AUDIO],
@@ -359,6 +359,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
             }
           },
           onclose: () => {
+            console.log('Live WS Gemini session closed');
             if (isClosed || clientWs.readyState !== WebSocket.OPEN) return;
             if (thisSessionRef && session && thisSessionRef !== session) return;
             // If a session opened with a resumptionHandle closes within 10 seconds of opening, clear resumptionHandle before reconnecting
@@ -373,6 +374,10 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         },
       });
 
+      const createdSession = await Promise.race([
+        connectPromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini Live connect timed out after 12000ms')), 12000)),
+      ]);
       sessionOpenedAt = Date.now();
       thisSessionRef = createdSession;
       return createdSession;
@@ -492,6 +497,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
 
       // 1. Expect first message to be { type: "init", idToken, product, context }
       if (!isInitialized) {
+        console.log('Live WS init message received');
         if (parsed?.type !== 'init' || typeof parsed.idToken !== 'string' || !parsed.idToken.trim()) {
           sendToClient({
             type: 'error',
@@ -505,6 +511,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         // Verify Firebase ID token BEFORE calling ai.live.connect
         try {
           verifiedUser = await verifyIdTokenString(parsed.idToken);
+          console.log('Live WS token verified');
         } catch (authErr: any) {
           sendToClient({
             type: 'error',
@@ -551,11 +558,13 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           return;
         }
 
+        console.log('Live WS opening Gemini session, model=' + config.liveModel);
         try {
           session = await openGeminiSession(
             resumptionHandle,
             Boolean(latestContext.recentTranscript && latestContext.recentTranscript.length > 0)
           );
+          console.log('Live WS Gemini session opened');
           sendToClient({ connected: true, model: config.liveModel });
         } catch (err: any) {
           console.error('Failed to connect to Gemini Live session:', err);
