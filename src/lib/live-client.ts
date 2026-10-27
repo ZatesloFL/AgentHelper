@@ -320,9 +320,21 @@ export class CalmGuideLiveClient {
     // so the default 4.5 average-diff threshold misses many of them on a
     // 32x18 thumbnail. 2.5 catches them while the 3s throttle and the
     // server's 30s proactive cooldown still cap chatter.
-    const shouldSend =
-      Boolean(options.forceChange) ||
-      hasScreenVisiblyChanged(this.latestScreenThumb, this.lastSentScreenThumb, 2.5);
+    // Plus a periodic frame: a settings toggle or permission switch can be
+    // a single pixel on a 32x18 thumbnail, so during a guided step it may
+    // never cross any diff threshold. A frame at most every 10s guarantees
+    // the model has a fresh screen to compare against the current step.
+    // Periodic frames are flagged so the server does NOT treat them as user
+    // activity (or the idle timer would never fire while sharing) and does
+    // NOT fire a screen-change turn for them — step-watch uses them instead.
+    const diffChanged = hasScreenVisiblyChanged(
+      this.latestScreenThumb,
+      this.lastSentScreenThumb,
+      2.5
+    );
+    const periodicDue = now - this.lastSentFrameTime >= 10_000;
+    const isPeriodic = !options.forceChange && !diffChanged && periodicDue;
+    const shouldSend = Boolean(options.forceChange) || diffChanged || isPeriodic;
 
     if (!shouldSend) return;
 
@@ -330,6 +342,7 @@ export class CalmGuideLiveClient {
       this.ws.send(
         JSON.stringify({
           video: this.latestScreenFrame,
+          ...(isPeriodic ? { periodic: true } : {}),
         })
       );
       this.lastSentFrameTime = now;

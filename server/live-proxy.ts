@@ -184,6 +184,12 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
     let pendingAutoDisconnect: 'idle' | 'resumeLater' | null = null;
     let proactiveTimerId: ReturnType<typeof setInterval> | null = null;
     let greetingSent = false;
+    // Step-watch state: a friend looking over your shoulder during a routine.
+    let lastScreenFrameAt = 0;
+    let lastModelTurnEndAt = 0;
+    let lastStepWatchAt = 0;
+    const STEP_WATCH_SILENCE_MS = 12_000;
+    const STEP_WATCH_COOLDOWN_MS = 25_000;
 
     const sendToClient = (payload: Record<string, any>) => {
       if (!isClosed && clientWs.readyState === WebSocket.OPEN) {
@@ -355,6 +361,34 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
                 );
               }
             }, 15_000);
+            return;
+          }
+          // Step-watch: a friend looking over your shoulder during a guided
+          // routine. The old model was turn-waiting: give an instruction, then
+          // wait for the user to speak before doing anything, so a user doing
+          // settings/permissions steps in silence heard nothing until they
+          // asked or made a major screen change. This fires instead when the
+          // user has been quiet for a while mid-routine, the screen is being
+          // shared, and a frame arrived recently — and the prompt tells the
+          // model to speak ONLY on completion, stuck, or off-track, and to
+          // stay silent while the user is mid-action and progressing.
+          if (
+            idleStage === 'active' &&
+            !pendingAutoDisconnect &&
+            latestContext.routineState?.activeRoutineId &&
+            lastScreenFrameAt > 0 &&
+            now - lastScreenFrameAt <= 30_000 &&
+            now - lastUserActivityAt >= STEP_WATCH_SILENCE_MS &&
+            now - lastStepWatchAt >= STEP_WATCH_COOLDOWN_MS &&
+            now - lastProactiveScreenAt >= STEP_WATCH_COOLDOWN_MS &&
+            (lastModelTurnEndAt === 0 || now - lastModelTurnEndAt >= 5_000)
+          ) {
+            lastStepWatchAt = now;
+            injectProactiveTurn(
+              'step watch',
+              `[Step watch] You are walking the user through a guided routine and you can see their screen. Look at the latest frame and compare it to the current step:\n${workContextBlock()}\nIf the step looks complete, say ONE short sentence confirming what you see and ask if they are ready for the next step — do NOT call confirm_step until they confirm. If they look stuck (same screen with no progress, a wrong page for this step, or a control they keep missing), say ONE short sentence naming what looks stuck or wrong and offer one hint or the way back. If they are mid-action and progressing normally (a menu open, a dropdown open, cursor on a control, a toggle just changed), stay silent and do not interrupt. Do not narrate the screen for its own sake.`
+            );
+          }
           }
         } catch (_) {}
       }, PROACTIVE_TICK_MS);
@@ -533,11 +567,13 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
 
               if (message.serverContent.interrupted) {
                 modelSpeaking = false;
+                lastModelTurnEndAt = Date.now();
                 sendToClient({ interrupted: true });
               }
 
               if (message.serverContent.turnComplete) {
                 modelSpeaking = false;
+                lastModelTurnEndAt = Date.now();
                 sendToClient({ turnComplete: true });
                 if (pendingAutoDisconnect) {
                   const kind = pendingAutoDisconnect;
@@ -841,9 +877,16 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
               mimeType: 'image/jpeg',
             },
           });
-          // Screen change is activity, but does not clear a "wait" pause.
-          markUserActivity({ clearPause: false });
-          maybeProactiveScreenCheck();
+          lastScreenFrameAt = Date.now();
+          if (parsed.periodic) {
+            // Periodic frame: fresh screen for step-watch, but NOT user
+            // activity — otherwise the idle timer would never fire while
+            // sharing, and it must not trigger a screen-change turn.
+          } else {
+            // Screen change is activity, but does not clear a "wait" pause.
+            markUserActivity({ clearPause: false });
+            maybeProactiveScreenCheck();
+          }
         } else if (parsed.video) {
           console.log('Live WS screen frame dropped, over 2MB');
         }
