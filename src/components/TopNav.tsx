@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AuthUser } from '../lib/firebase.js';
-import { ShieldCheck, Calendar, BookOpen, Layers, Wrench, Menu, X } from 'lucide-react';
+import { ShieldCheck, Calendar, BookOpen, Layers, Wrench, Menu, X, CreditCard } from 'lucide-react';
 
 interface TopNavProps {
   user: AuthUser | null;
@@ -14,6 +14,7 @@ interface TopNavProps {
   onOpenNotes: () => void;
   onOpenEscalation: () => void;
   onOpenAdmin: () => void;
+  onOpenPlan: () => void;
   onSignOut: () => void;
   onSignIn: () => void;
 }
@@ -30,6 +31,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   onOpenNotes,
   onOpenEscalation,
   onOpenAdmin,
+  onOpenPlan,
   onSignOut,
   onSignIn,
 }) => {
@@ -104,6 +106,16 @@ export const TopNav: React.FC<TopNavProps> = ({
           <span>Session Notes</span>
         </button>
 
+        {user && (
+          <button
+            onClick={onOpenPlan}
+            className="flex items-center gap-1.5 hover:text-[#1C1917] transition-colors whitespace-nowrap shrink-0 text-left"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            <span>My plan</span>
+          </button>
+        )}
+
         {isAdmin && (
           <button
             onClick={onOpenAdmin}
@@ -171,6 +183,11 @@ export const TopNav: React.FC<TopNavProps> = ({
           <button type="button" onClick={closeMobileMenu(onOpenNotes)} className="flex items-center gap-2 py-2.5 text-left hover:text-[#1C1917]">
             <ShieldCheck className="w-4 h-4" /><span>Session Notes</span>
           </button>
+          {user && (
+            <button type="button" onClick={closeMobileMenu(onOpenPlan)} className="flex items-center gap-2 py-2.5 text-left hover:text-[#1C1917]">
+              <CreditCard className="w-4 h-4" /><span>My plan</span>
+            </button>
+          )}
           {isAdmin && (
             <button type="button" onClick={closeMobileMenu(onOpenAdmin)} className="py-2.5 text-left text-xs text-[#78716C] hover:text-[#1C1917]">
               Admin Console

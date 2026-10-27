@@ -4,8 +4,22 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    // My Plan collections are SERVER-ONLY: the app server (Firebase Admin)
+    // is the only writer to membership (doc users/{uid}/membership/current)
+    // and nic_time_ledger, so a signed-in user can never grant themselves
+    // Nic time. Clients may read their own. The exclusion in the generic
+    // rules below is what enforces the write ban — a standalone deny rule
+    // alone would NOT, because any matching allow grants access.
+    // All other per-user collections (conversations, notes, progress,
+    // routines, profile, projects, audits, ...), including nested docs.
+    match /users/{userId}/{collectionId}/{docId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId
+        && !(collectionId in ['membership', 'nic_time_ledger']);
+    }
+    match /users/{userId}/{collectionId}/{docId}/{sub=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId
+        && !(collectionId in ['membership', 'nic_time_ledger']);
     }
     match /{document=**} {
       allow read, write: if false;

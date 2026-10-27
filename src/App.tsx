@@ -65,6 +65,7 @@ import { NotesDrawer } from './components/NotesDrawer.js';
 import { KnowledgeModal } from './components/KnowledgeModal.js';
 import { ToolsProfileModal, ToolsCatalogData } from './components/ToolsProfileModal.js';
 import { AdminView } from './components/AdminView.js';
+import { PlanView } from './components/PlanView.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
   Mic,
@@ -123,6 +124,7 @@ function buildGreetingMessage(progress: ProgressSummaryDoc | null, productName: 
 export default function App() {
   // Navigation / View State
   const [isAdminView, setIsAdminView] = useState<boolean>(false);
+  const [isPlanView, setIsPlanView] = useState<boolean>(false);
   const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
   // User & Consent State
@@ -927,6 +929,9 @@ export default function App() {
 
   // Check URL path on load (/admin) and fetch public /api/products & /api/health
   useEffect(() => {
+    if (window.location.pathname === '/plan') {
+      setIsPlanView(true);
+    }
     if (window.location.pathname === '/admin') {
       setIsAdminView(true);
     }
@@ -1678,6 +1683,26 @@ export default function App() {
     );
   }
 
+  // If viewing My plan (user is signed in)
+  if (isPlanView) {
+    return (
+      <PlanView
+        onClose={() => {
+          setIsPlanView(false);
+          window.history.pushState({}, '', '/');
+        }}
+        onOpenTools={() => {
+          setIsPlanView(false);
+          setShowToolsModal(true);
+        }}
+        onOpenNotes={() => {
+          setIsPlanView(false);
+          setShowNotesDrawer(true);
+        }}
+      />
+    );
+  }
+
   // If viewing /admin (user is signed in)
   if (isAdminView) {
     return (
@@ -1710,6 +1735,10 @@ export default function App() {
         onOpenAdmin={() => {
           setIsAdminView(true);
           window.history.pushState({}, '', '/admin');
+        }}
+        onOpenPlan={() => {
+          setIsPlanView(true);
+          window.history.pushState({}, '', '/plan');
         }}
         onSignOut={async () => {
           const uidToClear = user?.uid || lastSignedInUidRef.current;

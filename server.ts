@@ -37,6 +37,12 @@ import {
   dispatchCorrection,
 } from './server/escalations.js';
 import { setupLiveWebSocket } from './server/live-proxy.js';
+import {
+  handleGetMembership,
+  handleMembershipSync,
+  handleNicTimeSync,
+  handleAdminAdjust,
+} from './server/membership.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,8 +86,18 @@ async function startServer() {
     res.json(detailed);
   });
 
+  // --- My Plan sync endpoints (SYNC_SECRET, not user auth) ---
+  // These sit before requireUser so Supabase Edge Functions can forward
+  // purchase/booking events without a Firebase ID token.
+  app.post('/api/membership/sync', handleMembershipSync);
+  app.post('/api/nic-time/sync', handleNicTimeSync);
+
   // --- Authenticated API Routes (requireUser applied to every other /api route) ---
   app.use('/api', requireUser);
+
+  // My Plan (signed-in user reads their own membership copy + Nic-time ledger)
+  app.get('/api/membership', handleGetMembership);
+  app.post('/api/admin/membership/adjust', handleAdminAdjust);
 
   // Current signed-in user info & admin status
   app.get('/api/me', (req, res) => {
