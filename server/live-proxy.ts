@@ -251,9 +251,12 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           contextWindowCompression: { slidingWindow: {} },
-          proactivity: {
-            proactiveAudio: true,
-          },
+          // NOTE: Do NOT send proactivity here. For gemini-3.8-live, proactive
+          // audio is permanently enabled / included in the model, and the Live
+          // API server rejects the proactivity field in setup (close 1007,
+          // 'Unknown name "proactivity"'). The field is only required for
+          // gemini-live-2.5-flash-native-audio. Removing it restores connect
+          // without losing proactive behavior on 3.8-live.
           sessionResumption: { handle: handleToUse },
           speechConfig: {
             voiceConfig: {
