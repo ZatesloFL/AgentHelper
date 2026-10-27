@@ -389,7 +389,6 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
               `[Step watch] You are walking the user through a guided routine and you can see their screen. Look at the latest frame and compare it to the current step:\n${workContextBlock()}\nIf the step looks complete, say ONE short sentence confirming what you see and ask if they are ready for the next step — do NOT call confirm_step until they confirm. If they look stuck (same screen with no progress, a wrong page for this step, or a control they keep missing), say ONE short sentence naming what looks stuck or wrong and offer one hint or the way back. If they are mid-action and progressing normally (a menu open, a dropdown open, cursor on a control, a toggle just changed), stay silent and do not interrupt. Do not narrate the screen for its own sake.`
             );
           }
-          }
         } catch (_) {}
       }, PROACTIVE_TICK_MS);
     };
