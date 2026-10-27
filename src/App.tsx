@@ -1658,7 +1658,7 @@ export default function App() {
   // Require Google sign-in to use the app or /admin
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-[#FBF9F5] text-[#1C1917] flex items-center justify-center font-sans">
+      <div className="min-h-dvh bg-[#FBF9F5] text-[#1C1917] flex items-center justify-center font-sans">
         <span className="text-xs text-[#78716C] font-mono">Loading Calm Guide...</span>
       </div>
     );
@@ -1666,7 +1666,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#FBF9F5] text-[#1C1917] flex flex-col font-sans">
+      <div className="min-h-dvh bg-[#FBF9F5] text-[#1C1917] flex flex-col font-sans">
         <LoginModal
           isOpen={true}
           canClose={false}
@@ -1694,7 +1694,7 @@ export default function App() {
   const latestRetryMessage = [...messages].reverse().find(m => m.role === 'system' && m.retryText);
 
   return (
-    <div className="min-h-screen bg-[#FBF9F5] text-[#1C1917] flex flex-col font-sans selection:bg-[#EAE4D7]">
+    <div className="min-h-dvh bg-[#FBF9F5] text-[#1C1917] flex flex-col font-sans selection:bg-[#EAE4D7]">
       {/* Top Bar Contract */}
       <TopNav
         user={user}
@@ -1738,7 +1738,7 @@ export default function App() {
       />
 
       {/* Persistent Human Escalation & Incident Help Strip */}
-      <div className="bg-[#F4F0E8] border-b border-[#E6DFD3] px-6 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
+      <div className="bg-[#F4F0E8] border-b border-[#E6DFD3] px-4 sm:px-6 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[#57534E]">
           <span className="font-semibold text-[#1C1917]">Least access first:</span>
           <span className="hidden sm:inline">
@@ -1774,11 +1774,11 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 max-w-7xl w-full mx-auto flex flex-col lg:flex-row overflow-hidden">
         {/* Chat / Conversation Panel */}
-        <div className="flex-1 flex flex-col h-[calc(100vh-140px)] border-r border-[#E6DFD3] bg-[#FBF9F5]">
+        <div className="flex-1 flex flex-col h-[calc(100dvh-140px)] border-r border-[#E6DFD3] bg-[#FBF9F5]">
           {/* Transcript Scroll Area */}
           <div
             ref={chatScrollRef}
-            className="flex-1 overflow-y-auto p-6 space-y-5"
+            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5"
           >
             {messages.map((m) => {
               const isGuide = m.role === 'guide';
@@ -1855,7 +1855,7 @@ export default function App() {
                   </div>
 
                   <div
-                    className={`max-w-2xl rounded-2xl px-5 py-3.5 text-sm leading-relaxed ${
+                    className={`max-w-[88%] sm:max-w-2xl rounded-2xl px-4 py-3 sm:px-5 sm:py-3.5 text-sm leading-relaxed ${
                       isGuide
                         ? 'bg-white border border-[#E6DFD3] text-[#1C1917] shadow-2xs'
                         : 'bg-[#1C1917] text-[#FBF9F5]'
@@ -2036,7 +2036,7 @@ export default function App() {
           )}
 
           {/* Controls & Input Strip */}
-          <div className="border-t border-[#E6DFD3] bg-white p-4 space-y-3">
+          <div className="border-t border-[#E6DFD3] bg-white p-4 pb-safe space-y-3">
             {/* Action Buttons Row */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-2">
@@ -2050,7 +2050,7 @@ export default function App() {
                       ? 'Voice is temporarily unavailable — typing works.'
                       : undefined
                   }
-                  className={`px-3.5 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+                  className={`px-3.5 py-2.5 sm:py-1.5 rounded-lg font-medium transition-colors flex items-center gap-2 ${
                     isLive
                       ? 'bg-[#9A3412] text-white hover:bg-[#832B0F]'
                       : isConnectingLive
@@ -2084,7 +2084,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleToggleScreenShare}
-                    className={`px-3.5 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+                    className={`px-3.5 py-2.5 sm:py-1.5 rounded-lg font-medium transition-colors flex items-center gap-2 ${
                       isScreenSharing
                         ? 'bg-[#1C1917] text-white hover:bg-[#292524]'
                         : 'bg-[#F4F0E8] hover:bg-[#EAE4D7] text-[#1C1917] border border-[#E6DFD3]'
@@ -2094,7 +2094,7 @@ export default function App() {
                     <span>{isScreenSharing ? 'Stop Screen Share' : 'Share My Screen'}</span>
                   </button>
                 ) : (
-                  <label className="px-3.5 py-1.5 rounded-lg font-medium bg-[#F4F0E8] hover:bg-[#EAE4D7] text-[#1C1917] border border-[#E6DFD3] cursor-pointer flex items-center gap-2">
+                  <label className="px-3.5 py-2.5 sm:py-1.5 rounded-lg font-medium bg-[#F4F0E8] hover:bg-[#EAE4D7] text-[#1C1917] border border-[#E6DFD3] cursor-pointer flex items-center gap-2">
                     <Upload className="w-4 h-4" />
                     <span>Upload Screenshot</span>
                     <input
@@ -2112,7 +2112,7 @@ export default function App() {
                   type="button"
                   onClick={handleEndSession}
                   disabled={isEndingSession}
-                  className="px-3 py-1.5 rounded-lg font-medium bg-white hover:bg-[#F4F0E8] text-[#57534E] hover:text-[#1C1917] border border-[#E6DFD3] transition-colors flex items-center gap-1.5"
+                  className="px-3 py-2.5 sm:py-1.5 rounded-lg font-medium bg-white hover:bg-[#F4F0E8] text-[#57534E] hover:text-[#1C1917] border border-[#E6DFD3] transition-colors flex items-center gap-1.5"
                   title="Save a progress summary of this session"
                 >
                   <LogOut className="w-3.5 h-3.5" />
@@ -2137,12 +2137,12 @@ export default function App() {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder={`Ask anything, or describe what you want to achieve with ${currentProductName}...`}
-                className="flex-1 px-4 py-2.5 text-sm bg-[#FBF9F5] border border-[#E6DFD3] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#9A3412] text-[#1C1917] placeholder:text-[#A8A29E]"
+                className="flex-1 px-4 py-3 sm:py-2.5 text-base sm:text-sm bg-[#FBF9F5] border border-[#E6DFD3] rounded-xl focus:outline-none focus:ring-1 focus:ring-[#9A3412] text-[#1C1917] placeholder:text-[#A8A29E]"
               />
               <button
                 type="submit"
                 disabled={!inputText.trim()}
-                className="px-4 py-2.5 bg-[#1C1917] hover:bg-[#292524] disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0"
+                className="px-4 py-3 sm:py-2.5 bg-[#1C1917] hover:bg-[#292524] disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-1.5 shrink-0"
               >
                 <span>Send</span>
                 <Send className="w-3.5 h-3.5" />
@@ -2153,7 +2153,7 @@ export default function App() {
 
         {/* Guided Apps Sidebar */}
         {showAppsSidebar && (
-          <div className="w-full lg:w-88 p-5 bg-[#F4F0E8] border-l border-[#E6DFD3] flex flex-col space-y-5 overflow-y-auto h-[calc(100vh-140px)]">
+          <div className="w-full lg:w-88 p-4 sm:p-5 bg-[#F4F0E8] border-l border-[#E6DFD3] flex flex-col space-y-5 overflow-y-auto lg:h-[calc(100dvh-140px)]">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="text-xs font-mono uppercase tracking-widest text-[#78716C]">

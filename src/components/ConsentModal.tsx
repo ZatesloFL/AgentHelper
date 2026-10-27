@@ -11,7 +11,7 @@ export const ConsentModal: React.FC<ConsentModalProps> = ({ isOpen, onAccept }) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1C1917]/50 backdrop-blur-xs">
-      <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-xl max-w-lg w-full p-8 shadow-xl text-[#1C1917] space-y-6">
+      <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-xl max-w-lg w-full p-6 sm:p-8 shadow-xl text-[#1C1917] space-y-6">
         <div>
           <span className="text-xs font-mono uppercase tracking-widest text-[#78716C] block mb-1">
             Privacy & Guardrails
