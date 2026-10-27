@@ -588,6 +588,20 @@ export class CalmGuideLiveClient {
         return;
       }
 
+      // 3b. Server auto-disconnect (idle or resume-later): stop BOTH voice and
+      // screen share. Stopping voice alone would leave screen share running.
+      if (data.type === 'autoDisconnect') {
+        const reason =
+          typeof data.reason === 'string' && data.reason
+            ? data.reason
+            : 'Voice and screen share disconnected.';
+        this.addMessage('system', reason);
+        this.stopScreenShare();
+        this.config.onStopScreenshareRequested();
+        this.stopLiveSession(reason);
+        return;
+      }
+
       // 4. Initial connection confirmed by server
       if (data.connected) {
         this.clearConnectTimeout();
@@ -1330,6 +1344,12 @@ export class CalmGuideLiveClient {
             this.stopScreenShare();
             this.config.onStopScreenshareRequested();
             this.addMessage('system', 'Screen sharing ended by guide.');
+          } else if (ti.name === 'end_voice_and_screen_share') {
+            // Voice disconnect itself happens server-side after the guide's
+            // goodbye turn; stop screen share now so it does not linger.
+            this.stopScreenShare();
+            this.config.onStopScreenshareRequested();
+            this.addMessage('system', 'Screen sharing ended. Voice will disconnect after the guide says goodbye.');
           } else if (ti.name === 'get_booking_link' && ti.result?.bookingUrl) {
             this.addMessage('system', "Nic's Booking Page is ready:", {
               bookingUrl: ti.result.bookingUrl,

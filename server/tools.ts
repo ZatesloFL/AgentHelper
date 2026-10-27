@@ -47,6 +47,34 @@ export const toolDeclarations: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'pause_proactive_prompts',
+    description:
+      'Live voice only. Call this when the user says to wait / pause while they finish something quick outside the current work. Pauses proactive screen, idle, and off-track prompts until the user speaks again or the pause expires. Do NOT call this to end the session.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        minutes: {
+          type: Type.NUMBER,
+          description: 'How many minutes to pause proactive prompts. Default 5, maximum 15.',
+        },
+      },
+    },
+  },
+  {
+    name: 'end_voice_and_screen_share',
+    description:
+      'Live voice only. Call this when the user explicitly wants to turn off voice and screen share now and resume later. After you say a short goodbye and confirm progress is saved, the server will disconnect voice and screen share.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        reason: {
+          type: Type.STRING,
+          description: 'A brief reason the user gave for stopping now, if any.',
+        },
+      },
+    },
+  },
+  {
     name: 'launch_app',
     description:
       'Launches a step-by-step guided routine workflow for the user (getting-started, news-podcast, calendar-tasks, inbox-triage, first-task, safety-audit, weekly-review, something-went-wrong).',
@@ -621,6 +649,18 @@ export function executeServerTool(
 
     case 'stop_screenshare':
       return { stopped: true };
+
+    case 'pause_proactive_prompts':
+      return {
+        paused: true,
+        minutes: Math.max(1, Math.min(15, Number(safeArgs.minutes) || 5)),
+      };
+
+    case 'end_voice_and_screen_share':
+      return {
+        ended: true,
+        reason: typeof safeArgs.reason === 'string' ? safeArgs.reason : '',
+      };
 
     default:
       return { executed: false, tool: name };

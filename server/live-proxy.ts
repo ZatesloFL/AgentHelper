@@ -167,6 +167,23 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
     const reconnectTimestamps: number[] = [];
     const latestContext: SystemInstructionContext = {};
 
+    // --- Proactive step state (screen-change, idle, off-track) ---
+    // Activity that resets the idle timer: user speech (transcription), a typed
+    // text turn, a screen-frame change, or a context/tool update. Continuous mic
+    // audio chunks are NOT activity, or the timer would never fire.
+    const PROACTIVE_SCREEN_COOLDOWN_MS = 30_000;
+    const IDLE_CHECK_MS = 60_000;
+    const IDLE_DISCONNECT_MS = 60_000;
+    const PROACTIVE_TICK_MS = 10_000;
+    let lastUserActivityAt = Date.now();
+    let modelSpeaking = false;
+    let lastProactiveScreenAt = 0;
+    let lastProactiveIdleAt = 0;
+    let idleStage: 'active' | 'checkinSent' = 'active';
+    let proactivePausedUntil = 0;
+    let pendingAutoDisconnect: 'idle' | 'resumeLater' | null = null;
+    let proactiveTimerId: ReturnType<typeof setInterval> | null = null;
+
     const sendToClient = (payload: Record<string, any>) => {
       if (!isClosed && clientWs.readyState === WebSocket.OPEN) {
         try {
@@ -177,6 +194,10 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
 
     const cleanupSession = () => {
       isClosed = true;
+      if (proactiveTimerId) {
+        clearInterval(proactiveTimerId);
+        proactiveTimerId = null;
+      }
       const currentSession = session;
       session = null;
       if (currentSession) {
@@ -203,6 +224,106 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         } catch (_) {}
       }
       cleanupSession();
+    };
+
+    // --- Proactive helpers ---
+    const markUserActivity = (opts: { clearPause?: boolean } = {}) => {
+      lastUserActivityAt = Date.now();
+      idleStage = 'active';
+      if (opts.clearPause !== false) {
+        // Speech / text clears a "wait" pause: the user is back. Screen changes
+        // alone do not clear it (a detour page changing is still a detour).
+        proactivePausedUntil = 0;
+      }
+    };
+
+    const isProactivePaused = () => Date.now() < proactivePausedUntil;
+
+    const workContextBlock = () => {
+      const routine = formatRoutineStateSection(product, latestContext.routineState);
+      const progress = latestContext.progressSummary
+        ? `Progress so far: ${String(latestContext.progressSummary).slice(0, 600)}`
+        : 'No progress summary yet.';
+      return `Product: ${product}.\n${routine}\n${progress}`;
+    };
+
+    const injectProactiveTurn = (kind: string, text: string) => {
+      if (!session || isClosed || isReconnecting) return;
+      try {
+        session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turnComplete: true,
+        });
+        console.log(`Live WS proactive ${kind}`);
+      } catch (err: any) {
+        console.warn(`Failed to send proactive ${kind} turn:`, err?.message);
+      }
+    };
+
+    const maybeProactiveScreenCheck = () => {
+      const now = Date.now();
+      if (!session || isClosed || isReconnecting) return;
+      if (isProactivePaused()) return;
+      if (modelSpeaking) return;
+      if (now - lastProactiveScreenAt < PROACTIVE_SCREEN_COOLDOWN_MS) return;
+      lastProactiveScreenAt = now;
+      injectProactiveTurn(
+        'screen check',
+        `[Proactive screen check] The user's screen just changed, and you have the latest frame. The user is working on:\n${workContextBlock()}\nIf this screen moves that work forward, shows a blocker, or looks like the user has left the app or the steps they were on, say ONE short sentence naming the step and offering the next action. If they have left the work, say so plainly and ask whether they want to turn off now and resume later, or wait while they finish something quick. If the change is not relevant to their work, stay silent and do not narrate the screen.`
+      );
+    };
+
+    const doAutoDisconnect = (reason: string) => {
+      if (isClosed) return;
+      console.log('Live WS auto-disconnecting voice and screen share');
+      sendToClient({ type: 'autoDisconnect', reason });
+      // Give the client a moment to receive the message and stop screen share
+      // before the server closes the socket.
+      setTimeout(() => {
+        try {
+          clientWs.close();
+        } catch (_) {}
+        cleanupSession();
+      }, 500);
+    };
+
+    const startProactiveLoop = () => {
+      if (proactiveTimerId) return;
+      proactiveTimerId = setInterval(() => {
+        try {
+          if (!session || isClosed || isReconnecting) return;
+          if (isProactivePaused()) return;
+          if (modelSpeaking) return; // Pauses, does not reset, the idle timer.
+          const now = Date.now();
+          if (idleStage === 'active' && now - lastUserActivityAt >= IDLE_CHECK_MS) {
+            idleStage = 'checkinSent';
+            lastProactiveIdleAt = now;
+            injectProactiveTurn(
+              'idle check-in',
+              '[Idle check-in] The user has not spoken, typed, changed screens, or made tool progress for about a minute. Ask in ONE short sentence whether they want to continue, or need any help. Do not repeat instructions or narrate the screen.'
+            );
+            return;
+          }
+          if (
+            idleStage === 'checkinSent' &&
+            now - lastProactiveIdleAt >= IDLE_DISCONNECT_MS
+          ) {
+            pendingAutoDisconnect = 'idle';
+            injectProactiveTurn(
+              'auto-disconnect notice',
+              '[Auto-disconnect] The user has not responded for another minute after the idle check-in. Tell them in ONE short sentence that you are disconnecting voice and screen share now, and they can press Start Voice Chat to resume, with progress saved. Then stop speaking.'
+            );
+            // Fallback if the model never completes this turn.
+            setTimeout(() => {
+              if (pendingAutoDisconnect === 'idle' && !isClosed) {
+                doAutoDisconnect(
+                  'Disconnected voice and screen share after about 2 minutes with no response. Press Start Voice Chat to resume.'
+                );
+              }
+            }, 15_000);
+          }
+        } catch (_) {}
+      }, PROACTIVE_TICK_MS);
     };
 
     const openGeminiSession = async (
@@ -295,11 +416,31 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
                 const name = call.name || '';
                 const args = (call.args as Record<string, any>) || {};
 
-                try {
-                  result = executeServerTool(name, args, product);
-                } catch (toolErr: any) {
-                  console.error(`Tool execution failed for ${name}:`, toolErr);
-                  result = { error: toolErr.message || 'Execution failed' };
+                // Proactive-step tools are handled here, not by the shared
+                // tool executor, because they change this live session's state.
+                if (name === 'pause_proactive_prompts') {
+                  const minutes = Math.max(
+                    1,
+                    Math.min(15, Number(args.minutes) || 5)
+                  );
+                  proactivePausedUntil = Date.now() + minutes * 60_000;
+                  idleStage = 'active';
+                  result = { paused: true, minutes };
+                  console.log(`Live WS proactive paused for ${minutes} min`);
+                } else if (name === 'end_voice_and_screen_share') {
+                  pendingAutoDisconnect = 'resumeLater';
+                  result = {
+                    ended: true,
+                    reason: typeof args.reason === 'string' ? args.reason : '',
+                  };
+                  console.log('Live WS end requested by user via tool');
+                } else {
+                  try {
+                    result = executeServerTool(name, args, product);
+                  } catch (toolErr: any) {
+                    console.error(`Tool execution failed for ${name}:`, toolErr);
+                    result = { error: toolErr.message || 'Execution failed' };
+                  }
                 }
 
                 responses.push({
@@ -328,6 +469,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
             if (message.serverContent) {
               const inputText = message.serverContent.inputTranscription?.text;
               if (inputText) {
+                // Real user speech: activity, and it cancels a "wait" pause.
+                markUserActivity();
                 sendToClient({
                   type: 'userTranscript',
                   text: inputText,
@@ -336,6 +479,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
 
               const outputText = message.serverContent.outputTranscription?.text;
               if (outputText) {
+                modelSpeaking = true;
                 sendToClient({
                   type: 'guideTranscript',
                   text: outputText,
@@ -346,6 +490,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
               const parts = message.serverContent.modelTurn?.parts || [];
               for (const part of parts) {
                 if (part.inlineData?.data && part.inlineData.mimeType?.startsWith('audio/pcm')) {
+                  modelSpeaking = true;
                   sendToClient({
                     audio: part.inlineData.data,
                   });
@@ -353,11 +498,22 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
               }
 
               if (message.serverContent.interrupted) {
+                modelSpeaking = false;
                 sendToClient({ interrupted: true });
               }
 
               if (message.serverContent.turnComplete) {
+                modelSpeaking = false;
                 sendToClient({ turnComplete: true });
+                if (pendingAutoDisconnect) {
+                  const kind = pendingAutoDisconnect;
+                  pendingAutoDisconnect = null;
+                  doAutoDisconnect(
+                    kind === 'idle'
+                      ? 'Disconnected voice and screen share after about 2 minutes with no response. Press Start Voice Chat to resume.'
+                      : 'Voice and screen share turned off to resume later. Press Start Voice Chat whenever you want to continue.'
+                  );
+                }
               }
             }
           },
@@ -569,6 +725,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           );
           console.log('Live WS Gemini session opened');
           sendToClient({ connected: true, model: config.liveModel });
+          lastUserActivityAt = Date.now();
+          startProactiveLoop();
         } catch (err: any) {
           console.error('Failed to connect to Gemini Live session:', err);
           sendToClient({
@@ -588,6 +746,9 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
 
       // Context refresh from client (accepts { type: "context", ... } or { type: "context_update", ... })
       if (parsed.type === 'context' || parsed.type === 'context_update') {
+        // Progress / routine change is user activity, but does not clear a
+        // "wait" pause (it may be model-driven, not the user returning).
+        markUserActivity({ clearPause: false });
         mergeContextObject(latestContext, parsed.context || parsed);
         if (
           (parsed.routineState ||
@@ -635,6 +796,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         }
 
         // Screen share video frame (JPEG base64 downscaled to <= 1280px)
+        // NOTE: continuous mic audio above is NOT user activity. A video frame
+        // is: the client only sends one when the screen visibly changed.
         if (parsed.video && typeof parsed.video === 'string' && parsed.video.length <= 2 * 1024 * 1024) {
           session.sendRealtimeInput({
             video: {
@@ -642,10 +805,14 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
               mimeType: 'image/jpeg',
             },
           });
+          // Screen change is activity, but does not clear a "wait" pause.
+          markUserActivity({ clearPause: false });
+          maybeProactiveScreenCheck();
         }
 
         // Realtime text turn
         if (parsed.text && typeof parsed.text === 'string') {
+          markUserActivity();
           session.sendClientContent({
             turns: [
               {
