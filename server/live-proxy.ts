@@ -183,6 +183,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
     let proactivePausedUntil = 0;
     let pendingAutoDisconnect: 'idle' | 'resumeLater' | null = null;
     let proactiveTimerId: ReturnType<typeof setInterval> | null = null;
+    let greetingSent = false;
 
     const sendToClient = (payload: Record<string, any>) => {
       if (!isClosed && clientWs.readyState === WebSocket.OPEN) {
@@ -263,14 +264,47 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
     const maybeProactiveScreenCheck = () => {
       const now = Date.now();
       if (!session || isClosed || isReconnecting) return;
-      if (isProactivePaused()) return;
-      if (modelSpeaking) return;
-      if (now - lastProactiveScreenAt < PROACTIVE_SCREEN_COOLDOWN_MS) return;
+      if (isProactivePaused()) {
+        console.log('Live WS screen frame: proactive skipped, paused');
+        return;
+      }
+      if (modelSpeaking) {
+        console.log('Live WS screen frame: proactive skipped, model speaking');
+        return;
+      }
+      if (now - lastProactiveScreenAt < PROACTIVE_SCREEN_COOLDOWN_MS) {
+        console.log('Live WS screen frame: proactive skipped, cooldown');
+        return;
+      }
       lastProactiveScreenAt = now;
-      injectProactiveTurn(
-        'screen check',
-        `[Proactive screen check] The user's screen just changed, and you have the latest frame. The user is working on:\n${workContextBlock()}\nIf this screen moves that work forward, shows a blocker, or looks like the user has left the app or the steps they were on, say ONE short sentence naming the step and offering the next action. If they have left the work, say so plainly and ask whether they want to turn off now and resume later, or wait while they finish something quick. If the change is not relevant to their work, stay silent and do not narrate the screen.`
-      );
+      // Delay the turn ~1.5s so the just-forwarded video frame has landed in
+      // the model's context before it is asked about it. Re-check the gates
+      // at fire time; a newer frame cannot pre-empt this one because the
+      // cooldown above blocks scheduling a second turn in the meantime.
+      const scheduledAt = now;
+      setTimeout(() => {
+        if (!session || isClosed || isReconnecting) return;
+        if (lastProactiveScreenAt !== scheduledAt) return;
+        if (modelSpeaking) return;
+        if (isProactivePaused()) return;
+        injectProactiveTurn(
+          'screen check',
+          `[Proactive screen check] The user's screen just changed, and you have the latest frame. The user is working on:\n${workContextBlock()}\nIf this screen moves that work forward, shows a blocker, or looks like the user has left the app or the steps they were on, say ONE short sentence naming the step and offering the next action. If they have left the work, say so plainly and ask whether they want to turn off now and resume later, or wait while they finish something quick. If NO routine is active, the work is whatever the user is doing in the product app right now: do NOT stay silent just because there is no step to name — say in ONE short sentence what you see them doing in the app and ask what they are trying to do. A screen inside the product app itself IS relevant. Only stay silent if the screen is clearly unrelated to the product and their work, and even then use the off-track branch above.`
+        );
+      }, 1500);
+    };
+
+    const maybeGreetOnVoiceStart = () => {
+      if (greetingSent) return;
+      greetingSent = true;
+      // Small delay so the session settles before the first model turn.
+      setTimeout(() => {
+        if (!session || isClosed || isReconnecting) return;
+        injectProactiveTurn(
+          'session greeting',
+          `[Session start] You are Calm Guide. Greet the user warmly by voice in ONE short friendly sentence, introduce yourself as Calm Guide, and ask what they would like to work on today. Do not wait for the user to speak first. Context, if any:\n${workContextBlock()}`
+        );
+      }, 750);
     };
 
     const doAutoDisconnect = (reason: string) => {
@@ -727,6 +761,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           sendToClient({ connected: true, model: config.liveModel });
           lastUserActivityAt = Date.now();
           startProactiveLoop();
+          maybeGreetOnVoiceStart();
         } catch (err: any) {
           console.error('Failed to connect to Gemini Live session:', err);
           sendToClient({
@@ -799,6 +834,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         // NOTE: continuous mic audio above is NOT user activity. A video frame
         // is: the client only sends one when the screen visibly changed.
         if (parsed.video && typeof parsed.video === 'string' && parsed.video.length <= 2 * 1024 * 1024) {
+          console.log('Live WS screen frame received');
           session.sendRealtimeInput({
             video: {
               data: parsed.video,
@@ -808,6 +844,8 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
           // Screen change is activity, but does not clear a "wait" pause.
           markUserActivity({ clearPause: false });
           maybeProactiveScreenCheck();
+        } else if (parsed.video) {
+          console.log('Live WS screen frame dropped, over 2MB');
         }
 
         // Realtime text turn

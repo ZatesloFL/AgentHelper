@@ -316,9 +316,13 @@ export class CalmGuideLiveClient {
       return;
     }
 
+    // In-app changes (typing, opening a chat, a panel changing) are localized,
+    // so the default 4.5 average-diff threshold misses many of them on a
+    // 32x18 thumbnail. 2.5 catches them while the 3s throttle and the
+    // server's 30s proactive cooldown still cap chatter.
     const shouldSend =
       Boolean(options.forceChange) ||
-      hasScreenVisiblyChanged(this.latestScreenThumb, this.lastSentScreenThumb);
+      hasScreenVisiblyChanged(this.latestScreenThumb, this.lastSentScreenThumb, 2.5);
 
     if (!shouldSend) return;
 
