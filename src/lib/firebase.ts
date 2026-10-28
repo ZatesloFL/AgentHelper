@@ -158,7 +158,18 @@ export interface UserProjectDoc {
   product?: string;
   contract: TaskContractFields;
   rung: 0 | 1 | 2 | 3;
-  status: 'active' | 'paused';
+  status: 'active' | 'paused' | 'needs_setup';
+  // Track 2: a project created from a purchased template, before the
+  // Calm Guide intake (Track 3) turns it into a rung-0 contract. The
+  // template doc is copied in, not linked, so the member's project keeps
+  // working even if the template is later versioned.
+  templateSlug?: string;
+  templateVersion?: number;
+  goalInOneSentence?: string;
+  experienceLevel?: string;
+  whatDoneLooksLike?: string;
+  checkInRhythm?: string;
+  source?: string;
   history: ProjectRungHistoryItem[];
   createdAt: string;
   updatedAt: string;
@@ -1231,7 +1242,8 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
   if (doesContractDoRestrictPastRung2(contract.do) && rung > 2) {
     rung = 2;
   }
-  const status: 'active' | 'paused' = d?.status === 'paused' ? 'paused' : 'active';
+  const status: 'active' | 'paused' | 'needs_setup' =
+    d?.status === 'paused' ? 'paused' : d?.status === 'needs_setup' ? 'needs_setup' : 'active';
   const createdAt = toIsoString(d?.createdAt || d?.updatedAt || nowIso);
   const updatedAt = toIsoString(d?.updatedAt || nowIso);
   const rawHistory = Array.isArray(d?.history) ? d.history : [];
@@ -1257,6 +1269,27 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
   }
   if (typeof d?.product === 'string' && d.product.trim()) {
     docObj.product = d.product.trim().slice(0, 100);
+  }
+  if (typeof d?.templateSlug === 'string' && d.templateSlug.trim()) {
+    docObj.templateSlug = d.templateSlug.trim().slice(0, 200);
+  }
+  if (typeof d?.templateVersion === 'number') {
+    docObj.templateVersion = d.templateVersion;
+  }
+  if (typeof d?.goalInOneSentence === 'string' && d.goalInOneSentence.trim()) {
+    docObj.goalInOneSentence = d.goalInOneSentence.trim().slice(0, 500);
+  }
+  if (typeof d?.experienceLevel === 'string' && d.experienceLevel.trim()) {
+    docObj.experienceLevel = d.experienceLevel.trim().slice(0, 200);
+  }
+  if (typeof d?.whatDoneLooksLike === 'string' && d.whatDoneLooksLike.trim()) {
+    docObj.whatDoneLooksLike = d.whatDoneLooksLike.trim().slice(0, 1000);
+  }
+  if (typeof d?.checkInRhythm === 'string' && d.checkInRhythm.trim()) {
+    docObj.checkInRhythm = d.checkInRhythm.trim().slice(0, 200);
+  }
+  if (typeof d?.source === 'string' && d.source.trim()) {
+    docObj.source = d.source.trim().slice(0, 100);
   }
   return docObj;
 }
@@ -1293,6 +1326,107 @@ export async function getUserProjects(uid: string): Promise<Record<string, UserP
   }
 
   return map;
+}
+
+export interface TemplateDoc {
+  slug: string;
+  title: string;
+  audience?: string;
+  category?: string;
+  version: number;
+  goalInOneSentence?: string;
+  experienceLevel?: string;
+  whatDoneLooksLike?: string;
+  checkInRhythm?: string;
+  platformLayers?: Record<string, string>;
+}
+
+/** Read a shared template from Firestore templates/{slug} (signed-in read). */
+export async function getTemplate(slug: string): Promise<TemplateDoc | null> {
+  const clean = String(slug || '').trim();
+  if (!clean) return null;
+  try {
+    const snap = await getDoc(doc(db, 'templates', clean));
+    if (!snap.exists()) return null;
+    const d = snap.data() as any;
+    return {
+      slug: clean,
+      title: typeof d?.title === 'string' && d.title.trim() ? d.title : clean,
+      audience: typeof d?.audience === 'string' ? d.audience : undefined,
+      category: typeof d?.category === 'string' ? d.category : undefined,
+      version: typeof d?.version === 'number' ? d.version : 1,
+      goalInOneSentence: typeof d?.goalInOneSentence === 'string' ? d.goalInOneSentence : undefined,
+      experienceLevel: typeof d?.experienceLevel === 'string' ? d.experienceLevel : undefined,
+      whatDoneLooksLike: typeof d?.whatDoneLooksLike === 'string' ? d.whatDoneLooksLike : undefined,
+      checkInRhythm: typeof d?.checkInRhythm === 'string' ? d.checkInRhythm : undefined,
+      platformLayers: d?.platformLayers && typeof d.platformLayers === 'object' ? d.platformLayers : undefined,
+    };
+  } catch (err) {
+    console.warn('Error reading template from Firestore:', err);
+    return null;
+  }
+}
+
+/**
+ * Track 2: create the needs_setup project for a template a member just
+ * redeemed (validate-code returned its slug). Doc id is the template slug,
+ * so redeeming the same template twice is idempotent, and a project that
+ * already completed intake (active/paused) is never overwritten back to
+ * needs_setup. The contract stays empty until the Track 3 intake fills it
+ * at rung 0; the member's agent is not chosen yet, so product stays unset.
+ * Returns the project id, or null when the template does not exist.
+ */
+export async function createNeedsSetupProject(
+  uid: string,
+  templateSlug: string,
+  source = 'redemption',
+): Promise<string | null> {
+  if (!uid || !templateSlug) return null;
+  const template = await getTemplate(templateSlug);
+  if (!template) return null;
+  const projectId = template.slug;
+  const ref = doc(db, 'users', uid, 'projects', projectId);
+  const nowIso = new Date().toISOString();
+  try {
+    const existing = await getDoc(ref);
+    if (existing.exists()) {
+      const d = existing.data() as any;
+      if (d?.status === 'active' || d?.status === 'paused') return projectId;
+      await setDoc(ref, {
+        status: 'needs_setup',
+        templateSlug: template.slug,
+        templateVersion: template.version,
+        title: template.title,
+        goalInOneSentence: template.goalInOneSentence || null,
+        experienceLevel: template.experienceLevel || null,
+        whatDoneLooksLike: template.whatDoneLooksLike || null,
+        checkInRhythm: template.checkInRhythm || null,
+        source,
+        updatedAt: nowIso,
+      }, { merge: true });
+      return projectId;
+    }
+    await setDoc(ref, {
+      contract: { goal: '', do: '', do_not: '', ask_me_before: '', report_back: '', stop_if: '' },
+      rung: 0,
+      status: 'needs_setup',
+      templateSlug: template.slug,
+      templateVersion: template.version,
+      title: template.title,
+      goalInOneSentence: template.goalInOneSentence || null,
+      experienceLevel: template.experienceLevel || null,
+      whatDoneLooksLike: template.whatDoneLooksLike || null,
+      checkInRhythm: template.checkInRhythm || null,
+      source,
+      history: [{ rung: 0, at: nowIso }],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+    return projectId;
+  } catch (err) {
+    console.warn('Error creating needs_setup project:', err);
+    return null;
+  }
 }
 
 export async function saveUserProjectContract(
@@ -1335,7 +1469,7 @@ export async function saveUserProjectContract(
   }
 
   const createdAt = existing?.createdAt || nowIso;
-  const status: 'active' | 'paused' = data.status || existing?.status || 'active';
+  const status: 'active' | 'paused' | 'needs_setup' = data.status || existing?.status || 'active';
   const prevHistory = existing?.history ? [...existing.history] : [];
   const lastHistoryRung =
     prevHistory.length > 0 ? prevHistory[prevHistory.length - 1].rung : null;
