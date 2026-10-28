@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { X, Clock, Calendar, Sparkles } from 'lucide-react';
-import { authFetch } from '../lib/firebase.js';
+import { auth, authFetch, createNeedsSetupProject } from '../lib/firebase.js';
+
+const REDEEM_URL = 'https://ixfacparwrbkzxhbsuad.supabase.co/functions/v1/redeem-code';
 
 interface PlanBooking {
   id: string;
@@ -53,6 +55,42 @@ export const PlanView: React.FC<{
 }> = ({ onClose, onOpenTools, onOpenNotes }) => {
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [redeemCode, setRedeemCode] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+  const [redeemMessage, setRedeemMessage] = useState<string | null>(null);
+
+  const handleRedeem = async () => {
+    const code = redeemCode.trim().toUpperCase();
+    if (!code) { setRedeemMessage('Enter your access code first.'); return; }
+    const user = auth.currentUser;
+    if (!user) { setRedeemMessage('Sign in first, then redeem your code.'); return; }
+    setRedeeming(true);
+    setRedeemMessage(null);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(REDEEM_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.valid) {
+        setRedeemMessage(data.redeemed_by_other
+          ? 'That code was already claimed by another account.'
+          : 'That code is not valid for an active plan.');
+        return;
+      }
+      if (!data.template_slug) { setRedeemMessage('Code accepted, but no template was picked with this purchase.'); return; }
+      const projectId = await createNeedsSetupProject(user.uid, data.template_slug);
+      setRedeemMessage(projectId
+        ? `Template ready: ${data.template_slug}. Open it from your projects to start setup.`
+        : 'Code accepted, but the template could not be found. Contact Nic.');
+    } catch {
+      setRedeemMessage('Redemption is not available right now. Try again in a moment.');
+    } finally {
+      setRedeeming(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -211,6 +249,26 @@ export const PlanView: React.FC<{
             </div>
           </>
         )}
+
+        <div className="bg-white border border-[#E6DFD3] rounded-xl p-6 mb-6">
+          <h2 className="font-medium text-[#1C1917] mb-2">Redeem a purchase code</h2>
+          <p className="text-sm text-[#57534E] mb-3">
+            Bought a plan with a template picked? Enter your access code here and that template
+            will be set up as your next project.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={redeemCode}
+              onChange={(e) => setRedeemCode(e.target.value)}
+              placeholder="SL-XXXXXXXX"
+              className="px-3 py-2 rounded-lg border border-[#E6DFD3] text-sm flex-1 min-w-[180px]"
+            />
+            <button onClick={handleRedeem} disabled={redeeming} className="px-4 py-2 rounded-lg bg-[#1C1917] text-white text-sm disabled:opacity-50">
+              {redeeming ? 'Redeeming…' : 'Redeem'}
+            </button>
+          </div>
+          {redeemMessage && <p className="text-sm text-[#57534E] mt-3">{redeemMessage}</p>}
+        </div>
 
         <div className="bg-white border border-[#E6DFD3] rounded-xl p-6">
           <h2 className="font-medium text-[#1C1917] mb-3">Settings</h2>
