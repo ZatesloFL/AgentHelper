@@ -1359,20 +1359,45 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
     for (const [k, v] of Object.entries(rawSlots)) {
       if (typeof v === 'string') slots[k] = v.slice(0, 4000);
     }
-    docObj.intake = {
+    const intakeObj: ProjectIntakeState = {
       step: typeof d.intake.step === 'string' ? d.intake.step.slice(0, 60) : 'opening',
       slots,
-      agentChoice:
-        typeof d.intake.agentChoice === 'string' ? d.intake.agentChoice.slice(0, 60) : undefined,
-      geminiAccountType:
-        d.intake.geminiAccountType === 'personal' || d.intake.geminiAccountType === 'work'
-          ? d.intake.geminiAccountType
-          : undefined,
       completed: d.intake.completed === true,
       updatedAt: toIsoString(d.intake.updatedAt || updatedAt),
     };
+    // Optional keys are only SET when they hold a real value. An explicit
+    // `key: undefined` survives sanitizing and makes Firestore reject the
+    // whole setDoc ("Unsupported field value: undefined") — that bug froze
+    // intake progress saves and contract saves on 2026-10-29.
+    if (typeof d.intake.agentChoice === 'string' && d.intake.agentChoice) {
+      intakeObj.agentChoice = d.intake.agentChoice.slice(0, 60);
+    }
+    if (d.intake.geminiAccountType === 'personal' || d.intake.geminiAccountType === 'work') {
+      intakeObj.geminiAccountType = d.intake.geminiAccountType;
+    }
+    docObj.intake = intakeObj;
   }
   return docObj;
+}
+
+/**
+ * Recursively drop `undefined` values from a Firestore-bound payload.
+ * Firestore rejects an entire write over one undefined field, including
+ * inside nested maps; sanitizers build optional keys conditionally, and
+ * this is the last-line guarantee at the write sites themselves.
+ */
+export function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => stripUndefinedDeep(item)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value as Record<string, any>)) {
+      if (v !== undefined) out[k] = stripUndefinedDeep(v);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 export async function getUserProjects(uid: string): Promise<Record<string, UserProjectDoc>> {
@@ -1716,7 +1741,11 @@ export async function saveUserProjectContract(
     if (docObj.intake) firestorePayload.intake = docObj.intake;
 
     try {
-      await setDoc(doc(db, 'users', uid, 'projects', cleanId), firestorePayload, { merge: true });
+      await setDoc(
+        doc(db, 'users', uid, 'projects', cleanId),
+        stripUndefinedDeep(firestorePayload),
+        { merge: true }
+      );
     } catch (err) {
       console.warn(`Error saving project contract ${cleanId} to Firestore:`, err);
       throw new Error(
@@ -1792,7 +1821,11 @@ export async function updateUserProjectFields(
     }
   } catch (_) {}
   try {
-    await setDoc(doc(db, 'users', uid, 'projects', projectId), payload, { merge: true });
+    await setDoc(
+      doc(db, 'users', uid, 'projects', projectId),
+      stripUndefinedDeep(payload),
+      { merge: true }
+    );
     const snap = await getDoc(doc(db, 'users', uid, 'projects', projectId));
     if (snap.exists()) updatedDoc = sanitizeProjectDoc(projectId, snap.data());
   } catch (err) {
@@ -1833,7 +1866,7 @@ export async function createBlankProject(
   if (typeof opts.isGift === 'boolean') payload.isGift = opts.isGift;
   if (opts.giftRecipientName) payload.giftRecipientName = opts.giftRecipientName;
   try {
-    await setDoc(doc(db, 'users', uid, 'projects', projectId), payload);
+    await setDoc(doc(db, 'users', uid, 'projects', projectId), stripUndefinedDeep(payload));
     try {
       const raw = localStorage.getItem(`projects_${uid}`);
       const all = raw ? JSON.parse(raw) : {};
