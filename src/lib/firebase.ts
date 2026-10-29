@@ -167,6 +167,9 @@ export interface ProjectIntakeState {
   step: string;
   slots: Record<string, string>;
   agentChoice?: string;
+  // Gemini only: personal vs work Google account decides skills, Task
+  // mode and admin approvals (Google ecosystem research, 2026-10-29).
+  geminiAccountType?: 'personal' | 'work';
   completed?: boolean;
   updatedAt: string;
 }
@@ -1361,6 +1364,10 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
       slots,
       agentChoice:
         typeof d.intake.agentChoice === 'string' ? d.intake.agentChoice.slice(0, 60) : undefined,
+      geminiAccountType:
+        d.intake.geminiAccountType === 'personal' || d.intake.geminiAccountType === 'work'
+          ? d.intake.geminiAccountType
+          : undefined,
       completed: d.intake.completed === true,
       updatedAt: toIsoString(d.intake.updatedAt || updatedAt),
     };

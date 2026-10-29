@@ -107,6 +107,7 @@ export const OnboardingView: React.FC<{
 
   const [generalStep, setGeneralStep] = useState<GeneralStep>('welcome');
   const [assistantChoice, setAssistantChoice] = useState<string>('unsure');
+  const [geminiAccountType, setGeminiAccountType] = useState<'personal' | 'work' | ''>('');
   const [comfort, setComfort] = useState<string>('');
   const [goalsText, setGoalsText] = useState<string>('');
 
@@ -172,6 +173,7 @@ export const OnboardingView: React.FC<{
     };
     setSlots({ ...defaults, ...(saved?.slots || {}) });
     setAssistantChoice(saved?.agentChoice || onboarding?.assistantProduct || 'unsure');
+    setGeminiAccountType(saved?.geminiAccountType || '');
     setConfirmed(false);
     const resumeAt = saved && !saved.completed && INTAKE_STEPS.includes(saved.step as IntakeStep)
       ? (saved.step as IntakeStep)
@@ -224,6 +226,7 @@ export const OnboardingView: React.FC<{
     step: IntakeStep,
     nextSlots: Record<string, string>,
     agent: string,
+    acct: 'personal' | 'work' | '' = geminiAccountType,
   ) => {
     if (!activeProjectId) return;
     await updateUserProjectFields(user.uid, activeProjectId, {
@@ -231,10 +234,16 @@ export const OnboardingView: React.FC<{
         step,
         slots: nextSlots,
         agentChoice: agent,
+        ...(acct ? { geminiAccountType: acct } : {}),
         completed: false,
         updatedAt: new Date().toISOString(),
       },
     });
+  };
+
+  const chooseGeminiAccountType = async (acct: 'personal' | 'work') => {
+    setGeminiAccountType(acct);
+    await persistIntake(intakeStep as IntakeStep, slots, assistantChoice, acct);
   };
 
   const goIntakeStep = async (step: IntakeStep) => {
@@ -337,6 +346,7 @@ export const OnboardingView: React.FC<{
           step: 'closing',
           slots,
           agentChoice: assistantChoice,
+          ...(geminiAccountType ? { geminiAccountType } : {}),
           completed: true,
           updatedAt: new Date().toISOString(),
         },
@@ -919,6 +929,56 @@ export const OnboardingView: React.FC<{
               <h2 className="font-medium text-[#1C1917] mb-2">
                 Setting up with {agentName(product)}
               </h2>
+              {product === 'gemini' && (
+                <div className="mb-3 rounded-lg border border-[#E6DFD3] bg-[#FBF9F5] px-3 py-2.5">
+                  <p className="text-sm font-medium text-[#1C1917] mb-1">
+                    One quick thing that changes this setup
+                  </p>
+                  <p className={helpCls}>
+                    Is the Google account you'll use here a personal one, or a work or school
+                    one? They don't offer the same things.
+                  </p>
+                  <div className="space-y-2 mt-2">
+                    {(
+                      [
+                        { id: 'personal', label: 'Personal — my own Google account' },
+                        { id: 'work', label: 'Work or school — an account an organization manages' },
+                      ] as const
+                    ).map((o) => (
+                      <label
+                        key={o.id}
+                        className="flex items-center gap-2 text-sm text-[#1C1917] bg-white border border-[#E6DFD3] rounded-lg px-3 py-2 cursor-pointer"
+                      >
+                        <input
+                          type="radio"
+                          name="gemini-account-type"
+                          checked={geminiAccountType === o.id}
+                          onChange={() => void chooseGeminiAccountType(o.id)}
+                        />
+                        {o.label}
+                      </label>
+                    ))}
+                  </div>
+                  {geminiAccountType === 'personal' && (
+                    <p className="text-sm text-[#57534E] mt-2">
+                      Personal account: your helper lives in a <strong>skill</strong> (Google is
+                      retiring Gems on personal accounts this December), and skills need "Keep
+                      Activity" turned on in your Google settings. Anything your helper does on a
+                      schedule needs Google AI Plus — the steps below assume the free plan unless
+                      they say otherwise.
+                    </p>
+                  )}
+                  {geminiAccountType === 'work' && (
+                    <p className="text-sm text-[#57534E] mt-2">
+                      Work or school account: your organization's admin decides what's allowed.
+                      Connecting Gmail or Calendar may need their approval, Gemini's automatic
+                      Task mode isn't offered on work accounts, and Gems stay available there
+                      until at least March 2027. If a step below doesn't appear for you, it's
+                      usually an admin setting — not something you did wrong.
+                    </p>
+                  )}
+                </div>
+              )}
               {layer ? (
                 <>
                   {layer.setupFeature && (
