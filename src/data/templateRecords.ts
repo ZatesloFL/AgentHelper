@@ -1,14 +1,14 @@
 // Bundled template records (Claude runs 1-5 + v4 runModes amendment,
-// 2026-10-29) — the fallback copy of the Firestore templates collection.
-// All 15 personal templates at version 4, five platform layers each, with
-// structured requirements + two-mode run costs. Firestore wins whenever
-// it has a doc for a slug; these fill the gap until the admin import
-// runs, and keep the picker/intake working if Firestore is unreachable.
-// Source of truth for content: Basic Memory
+// questions pass 2026-10-29) — the fallback copy of the Firestore
+// templates collection. All 15 personal templates at version 5, five
+// platform layers each, with structured requirements + two-mode run
+// costs, plus shortDescription, narrative and the setup `questions`
+// block from Nic's Project Setup Flow Redesign Spec. Firestore wins
+// whenever it has a doc for a slug; these fill the gap until the admin
+// import runs, and keep the picker/intake working if Firestore is
+// unreachable. Source of truth for content: Basic Memory
 // projects/second-look-template-layers/. Import to Firestore from the
 // Admin console (POST /api/admin/templates/import).
-// 2026-10-29 patch (redesign spec section 10): daily-news-podcast
-// contract wording fixes — see records-staging/PATCHES-2026-10-29.md.
 
 export const TEMPLATE_RECORDS: any[] = [
  {
@@ -16,7 +16,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Trip Planner",
   "audience": "personal",
   "category": "Planning and travel",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to plan a memorable trip — whether a dream trip to Egypt or a week in the mountains — with a realistic pace, rest time, and a complete packing and document checklist.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A day-by-day itinerary with morning and afternoon options, hotel neighborhood advice, visa/passport checklist, and a printable summary.",
@@ -1033,6 +1033,75 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://about.fb.com/ja/news/2026/10/muse-personal-ai-agent-launches-in-japan/amp/"
+  ],
+  "shortDescription": "Plan a trip at your pace — flights, hotels, and a day-by-day plan you approve.",
+  "narrative": "Tell your helper where you want to go, and it builds the trip around your pace — flights and hotels compared side by side, days planned with rest built in, and a checklist so nothing gets missed. You book everything yourself; your helper brings you the options and the plan.",
+  "questions": [
+   {
+    "id": "destination-origin",
+    "label": "Where you're going",
+    "prompt": "Where are you headed, and where are you traveling from?",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "dates",
+    "label": "When",
+    "prompt": "What are your dates — or a rough window, if they're not fixed yet?",
+    "type": "text",
+    "required": true,
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "travelers",
+    "label": "Who's traveling",
+    "prompt": "Who's going? Names and ages are plenty — and note anything about mobility or rest needs your helper should plan around.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "pace",
+    "label": "Pace",
+    "prompt": "How full do you like your days?",
+    "type": "choice",
+    "options": [
+     "Relaxed",
+     "Balanced (2 on, 1 off)",
+     "Packed"
+    ],
+    "required": true,
+    "default": "Balanced (2 on, 1 off)",
+    "mapsTo": "do"
+   },
+   {
+    "id": "budget",
+    "label": "Budget and airlines",
+    "prompt": "What should hotels aim for each night?",
+    "type": "choice",
+    "options": [
+     "Under $150 a night",
+     "$150–$250 a night",
+     "$250–$400 a night",
+     "Flexible"
+    ],
+    "required": false,
+    "default": "$150–$250 a night",
+    "followUp": {
+     "when": "any",
+     "prompt": "Any airline you prefer — or one to avoid?"
+    },
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "must-dos",
+    "label": "Must-dos and must-avoids",
+    "prompt": "Anything that has to make the trip — or anything to keep off it?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   }
   ]
  },
  {
@@ -1040,7 +1109,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Insurance and Bill Appeal Helper",
   "audience": "personal",
   "category": "Start with these",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to appeal a rejected insurance claim or confusing medical bill without spending hours on hold or missing a deadline.",
   "experienceLevel": "Complete beginner — no prior AI experience needed.",
   "whatDoneLooksLike": "You have a clear checklist of why the claim was denied, a polite and firm appeal letter citing the exact policy codes ready to mail or upload, and a calendar reminder to follow up in 14 days.",
@@ -2016,6 +2085,69 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.claude.com/en/articles/11817273",
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "Turns a denied claim or confusing bill into an appeal letter you're ready to send.",
+  "narrative": "You share the denial or the bill, and your helper explains in plain English why it was denied and what the insurer actually needs. Together you gather the two or three documents that matter, and your helper drafts a polite, firm appeal letter citing the exact policy codes — you read and approve every word before it goes anywhere. Your helper checks in every week until the appeal is sent, then reminds you 14 days later to follow up on the claim's status.",
+  "questions": [
+   {
+    "id": "situation",
+    "label": "What you're appealing",
+    "prompt": "What are we working on — a denied claim, a confusing bill, or both?",
+    "type": "choice",
+    "options": [
+     "A claim was denied",
+     "A bill looks wrong or confusing",
+     "Both — a denial and a bill"
+    ],
+    "required": true,
+    "default": "A claim was denied",
+    "mapsTo": "goal"
+   },
+   {
+    "id": "details",
+    "label": "The basics of the bill or claim",
+    "prompt": "Tell me the basics in your own words: who sent the bill or denial, the date of service, and the denial reason if the letter gives one. Never include a Social Security number, card number, or password — cover those up first.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "documents",
+    "label": "Documents you have on hand",
+    "prompt": "Which of these do you have handy? Your helper will turn them into a short checklist of exactly what to include with the appeal.",
+    "type": "multiChips",
+    "options": [
+     "The denial letter or explanation of benefits",
+     "My doctor's note or recommendation",
+     "The bill or claim statement",
+     "My policy or coverage details"
+    ],
+    "allowOther": true,
+    "required": false,
+    "mapsTo": "do"
+   },
+   {
+    "id": "deadline",
+    "label": "Your appeal deadline, if you know it",
+    "prompt": "Does the denial letter give you a deadline to appeal by? If you know the date, tell me — we'll make sure the reminders land well before it.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "check-in-rhythm",
+    "label": "How often your helper checks in",
+    "prompt": "How should your helper keep this moving? The standard rhythm is a check-in every 7 days until the appeal is sent, then a follow-up 14 days later to check the claim's status.",
+    "type": "choice",
+    "options": [
+     "Every 7 days, then a follow-up 14 days after I send it",
+     "Every 7 days until it's sent — no follow-up after",
+     "Just remind me once, in 14 days"
+    ],
+    "required": true,
+    "default": "Every 7 days, then a follow-up 14 days after I send it",
+    "mapsTo": "schedule"
+   }
   ]
  },
  {
@@ -2023,10 +2155,10 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Family Scheduler",
   "audience": "personal",
   "category": "Start with these",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want one calm Sunday ritual that turns scattered family texts, school flyers, and appointments into a clear weekly plan for everyone.",
   "experienceLevel": "Beginner — works great with phone voice mode or text.",
-  "whatDoneLooksLike": "Every Sunday at 5pm, you have a clean week-at-a-glance summary ready to paste into the family group text, with ride handoffs and dinner nights settled.",
+  "whatDoneLooksLike": "On your planning day each week, you have a clean week-at-a-glance summary ready to paste into the family group text, with ride handoffs and dinner nights settled.",
   "checkInRhythm": "Weekly every Sunday afternoon (or your preferred planning day) plus a mid-week Wednesday glance.",
   "contract": {
    "goal": "I want one calm Sunday ritual that turns scattered family texts, school flyers, and appointments into a clear weekly plan for everyone.",
@@ -2043,7 +2175,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Removing or rescheduling any recurring appointment."
    ],
    "report_back": [
-    "Every Sunday at 5pm, a clean week-at-a-glance summary ready to paste into the family group text, with ride handoffs and dinner nights settled.",
+    "On your planning day each week, a clean week-at-a-glance summary ready to paste into the family group text, with ride handoffs and dinner nights settled.",
     "Weekly every Sunday afternoon (or my preferred planning day) plus a mid-week Wednesday glance."
    ],
    "stop_if": [
@@ -3013,6 +3145,80 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597",
    "https://support.google.com/gemini/answer/15274899"
+  ],
+  "shortDescription": "Turns scattered family texts and flyers into one clear weekly plan for everyone.",
+  "narrative": "Once a week, you bring your helper the scattered pieces — group texts, school flyers, appointments — and talk through each day of the week ahead. Your helper spots overlapping times and missing rides, settles the ride handoffs and dinner nights, and writes a warm week-at-a-glance summary you can paste straight into the family group text. Nothing is ever sent for you; you review the draft and send it yourself.",
+  "questions": [
+   {
+    "id": "household",
+    "label": "Who's in your household",
+    "prompt": "Who's in your household? Names (and ages for kids) help your helper keep everyone's week straight.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "routines",
+    "label": "Your regular weekly routines",
+    "prompt": "What happens most weeks — school, work, doctor visits, club meetings, practices? List the regulars so your helper can build around them.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "planning-day",
+    "label": "Your planning day",
+    "prompt": "Which day do you want to plan the week? Most families pick Sunday, before the week starts.",
+    "type": "days",
+    "options": [
+     "Sunday",
+     "Saturday",
+     "Friday",
+     "Monday"
+    ],
+    "required": true,
+    "default": "Sunday",
+    "followUp": {
+     "when": "any day",
+     "prompt": "And what time should your week-at-a-glance be ready? The usual time is 5:00pm."
+    },
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "midweek-glance",
+    "label": "A mid-week glance too",
+    "prompt": "Would a quick mid-week glance help too — a Wednesday check on how the rest of the week looks?",
+    "type": "choice",
+    "options": [
+     "Yes — a Wednesday glance too",
+     "No — just the weekly plan"
+    ],
+    "required": true,
+    "default": "Yes — a Wednesday glance too",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "summary-format",
+    "label": "How your weekly summary reads",
+    "prompt": "How do you want the summary your helper drafts for the family group text?",
+    "type": "choice",
+    "options": [
+     "A short week-at-a-glance I can paste into our family group text",
+     "A day-by-day list, Monday to Sunday",
+     "A short list of just rides, pickups, and dinners"
+    ],
+    "required": true,
+    "default": "A short week-at-a-glance I can paste into our family group text",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "never-move",
+    "label": "Appointments to never move without asking",
+    "prompt": "Anything that must never get lost or moved without asking you first — regular ride handoffs, dinner nights, or recurring appointments?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "ask_me_before"
+   }
   ]
  },
  {
@@ -3020,7 +3226,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Daily News Podcast",
   "audience": "personal",
   "category": "Start with these",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want a calm 7-minute morning update on the exact topics I care about — read aloud while I drink my coffee — without clickbait or outrage.",
   "experienceLevel": "Complete beginner — if you can tap a play button, you can use this.",
   "whatDoneLooksLike": "Every morning with coffee, you tap one button and hear a calm, balanced briefing on local Tallahassee news, your favorite sports team, gardening, or science.",
@@ -3981,6 +4187,115 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597",
    "https://support.google.com/gemini/answer/15146780"
+  ],
+  "shortDescription": "A short morning briefing on your topics, read aloud with your coffee.",
+  "narrative": "Each morning, your helper prepares a short briefing on exactly the topics you chose — local news, your team, the garden — and reads it aloud while you drink your coffee. Nothing sensational, nothing you asked to skip, and every story from a source you can check.",
+  "questions": [
+   {
+    "id": "topics",
+    "label": "Your topics",
+    "prompt": "What should your morning briefing cover?",
+    "type": "multiChips",
+    "options": [
+     "Tallahassee local news",
+     "Florida news",
+     "National news",
+     "Weather",
+     "A sports team",
+     "Gardening",
+     "Science",
+     "Business",
+     "Other"
+    ],
+    "allowOther": true,
+    "required": true,
+    "followUp": {
+     "when": "A sports team",
+     "prompt": "Which team?"
+    },
+    "mapsTo": "goal"
+   },
+   {
+    "id": "skip",
+    "label": "Topics to skip",
+    "prompt": "Anything you never want in it?",
+    "type": "multiChips",
+    "options": [
+     "Politics",
+     "Sports",
+     "Crime and courts",
+     "Celebrity news",
+     "Markets and crypto",
+     "Other"
+    ],
+    "allowOther": true,
+    "required": false,
+    "default": [],
+    "mapsTo": "do_not"
+   },
+   {
+    "id": "length",
+    "label": "Length",
+    "prompt": "How long should it run?",
+    "type": "choice",
+    "options": [
+     "3 minutes",
+     "5 minutes",
+     "7 minutes",
+     "10 minutes"
+    ],
+    "required": true,
+    "default": "7 minutes",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "schedule",
+    "label": "When it arrives",
+    "prompt": "Which mornings should it be ready?",
+    "type": "days",
+    "required": true,
+    "default": "Weekdays",
+    "followUp": {
+     "when": "always",
+     "prompt": "And what time should it be ready by?"
+    },
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "listening",
+    "label": "How you'll listen",
+    "prompt": "How do you want to take it in?",
+    "type": "choice",
+    "options": [
+     "Read it myself",
+     "Phone read-aloud",
+     "Agent voice if available"
+    ],
+    "required": true,
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "sources",
+    "label": "Trusted sources",
+    "prompt": "Any local outlets you trust — or want avoided?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "do"
+   },
+   {
+    "id": "tone",
+    "label": "Tone",
+    "prompt": "What tone should it strike?",
+    "type": "choice",
+    "options": [
+     "Calm and factual",
+     "Warm and chatty",
+     "Short and brisk"
+    ],
+    "required": false,
+    "default": "Calm and factual",
+    "mapsTo": "do"
+   }
   ]
  },
  {
@@ -3988,7 +4303,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Bill and Renewal Watcher",
   "audience": "personal",
   "category": "Life admin",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want a simple list of every subscription, insurance policy, and annual bill so I get warned 30 days before any automatic renewal or price jump.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A clear table of every recurring charge, how much it costs, when it renews, and a 30-day heads-up reminder before you get charged.",
@@ -3999,7 +4314,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Help me build a clean Subscription & Bill Renewal tracker.",
     "When I tell you a service name, amount, and billing cycle, organize it chronologically.",
     "Calculate the yearly total.",
-    "Tell me what date I should set a reminder (14 to 30 days prior) to review or cancel it."
+    "Set my reminder 30 days before each renewal — or the lead time I picked for that bill."
    ],
    "do_not": [
     "Never ask for account numbers or passwords.",
@@ -4960,6 +5275,89 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "Lists every recurring charge and warns you 30 days before a renewal or price jump.",
+  "narrative": "You read your helper the recurring charges from a statement — just the company name, amount, and date, never a card or account number — and it builds a clean tracker sorted by when each charge renews. You see the yearly total for everything, and each annual renewal gets a reminder 14 to 30 days ahead, while there's still time to review it or cancel it yourself. Once a month you spend about ten minutes reviewing what's coming up.",
+  "questions": [
+   {
+    "id": "what-to-track",
+    "label": "What your helper tracks",
+    "prompt": "What kinds of recurring charges should your helper keep an eye on?",
+    "type": "multiChips",
+    "options": [
+     "Streaming and software subscriptions",
+     "Insurance policies (car, home, health)",
+     "Annual memberships",
+     "Home services and warranties",
+     "Utilities and regular bills"
+    ],
+    "allowOther": true,
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "first-charges",
+    "label": "The first charges for your tracker",
+    "prompt": "To start the tracker, name the first few charges you can think of — just the company, the amount, and how often you're billed. Never include account numbers, card numbers, or passwords.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "warning-lead",
+    "label": "How much warning before a renewal",
+    "prompt": "How far ahead do you want your heads-up before a renewal charges you?",
+    "type": "choice",
+    "options": [
+     "30 days before",
+     "14 days before",
+     "Between 14 and 30 days — picked per bill"
+    ],
+    "required": true,
+    "default": "30 days before",
+    "mapsTo": "do"
+   },
+   {
+    "id": "monthly-review",
+    "label": "Your monthly review day",
+    "prompt": "When should your helper walk you through the tracker each month? It takes about 10 minutes.",
+    "type": "choice",
+    "options": [
+     "The first Saturday of each month",
+     "The first Sunday of each month",
+     "The 1st of each month"
+    ],
+    "required": true,
+    "default": "The first Saturday of each month",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "tracker-format",
+    "label": "What your tracker shows you",
+    "prompt": "What should your tracker show you each month?",
+    "type": "choice",
+    "options": [
+     "A table of every charge with renewal dates, plus my yearly total",
+     "Just the table — skip the yearly total",
+     "The table plus a heads-up list of what's renewing soon"
+    ],
+    "required": true,
+    "default": "A table of every charge with renewal dates, plus my yearly total",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "duplicates",
+    "label": "Spotting duplicate services",
+    "prompt": "If your helper spots two services that look like duplicates — two streaming or software charges for the same thing — what should it do?",
+    "type": "choice",
+    "options": [
+     "Flag them for me to decide",
+     "Just list them — I'll spot problems myself"
+    ],
+    "required": false,
+    "default": "Flag them for me to decide",
+    "mapsTo": "do"
+   }
   ]
  },
  {
@@ -4967,7 +5365,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Paperwork Helper",
   "audience": "personal",
   "category": "Life admin",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "When I get a dense letter, HOA notice, warranty contract, or government form, I want it explained in plain English so I know exactly what I need to do.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "You have a 3-bullet summary of what the letter says, whether any deadline applies, and the exact steps required.",
@@ -5910,6 +6308,80 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.claude.com/en/articles/11817273",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "Explains dense letters and forms in plain English, with deadlines and next steps.",
+  "narrative": "Whenever a dense letter or form lands in your mailbox, you cover any ID numbers, share a photo or the text, and your helper explains it the way a knowledgeable neighbor would over coffee. You get a short summary of what it says, any deadline or fee hiding in it, and the exact steps required — plus good questions to ask before you sign or reply to anything. You always do the signing and sending yourself.",
+  "questions": [
+   {
+    "id": "paperwork-kinds",
+    "label": "The paperwork you get most",
+    "prompt": "What kinds of paperwork land in your mailbox most often?",
+    "type": "multiChips",
+    "options": [
+     "Insurance or medical letters",
+     "HOA notices",
+     "Warranty or service contracts",
+     "Government forms or letters",
+     "Bills and statements"
+    ],
+    "allowOther": true,
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "explanation-style",
+    "label": "How your helper explains a document",
+    "prompt": "When you share a letter or form, how should your helper explain it back to you?",
+    "type": "choice",
+    "options": [
+     "A 3-bullet summary, then the exact steps I need to take",
+     "Start with deadlines and fees, then explain the rest",
+     "Explain it like a neighbor over coffee, then the next steps"
+    ],
+    "required": true,
+    "default": "A 3-bullet summary, then the exact steps I need to take",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "deadlines-first",
+    "label": "Deadlines and fees",
+    "prompt": "Deadlines and fees hide in fine print. How should your helper handle them?",
+    "type": "choice",
+    "options": [
+     "Always pull out deadlines and fees first",
+     "Only mention a deadline if there is one",
+     "Pull out deadlines, fees, and anything I'd be agreeing to"
+    ],
+    "required": true,
+    "default": "Always pull out deadlines and fees first",
+    "mapsTo": "do"
+   },
+   {
+    "id": "before-signing",
+    "label": "Before you sign or reply",
+    "prompt": "Before you sign or reply to anything, what should your helper prepare for you?",
+    "type": "choice",
+    "options": [
+     "A short checklist of questions to ask the sender",
+     "Just the explanation — I'll decide my own questions"
+    ],
+    "required": false,
+    "default": "A short checklist of questions to ask the sender",
+    "mapsTo": "do"
+   },
+   {
+    "id": "when-to-use",
+    "label": "When your helper does this",
+    "prompt": "This helper works on demand, whenever mail arrives — there's no regular check-in. Does that suit you, or would a weekly sit-down with the week's mail be better?",
+    "type": "choice",
+    "options": [
+     "Whenever mail arrives — no regular check-in",
+     "A weekly sit-down with the week's mail"
+    ],
+    "required": true,
+    "default": "Whenever mail arrives — no regular check-in",
+    "mapsTo": "schedule"
+   }
   ]
  },
  {
@@ -5917,7 +6389,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Email Inbox Triage",
   "audience": "personal",
   "category": "Life admin",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to clear out email overwhelm by sorting what actually needs a reply today and having polite draft responses ready in my own voice.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "The 5 toughest emails in your inbox have warm, clear replies drafted and waiting for your review.",
@@ -5944,7 +6416,7 @@ export const TEMPLATE_RECORDS: any[] = [
    ]
   },
   "steps": [
-   "Step 1 (10 mins): Pick 3 emails you have been procrastinating on and paste them into your helper.",
+   "Step 1 (10 mins): Pick 5 emails you have been procrastinating on and paste them into your helper.",
    "Step 2 (10 mins): Tell your helper in one casual sentence what you want to say (\"Tell Bob we can come Saturday, but only until 4pm\").",
    "Step 3 (10 mins): Copy the polished reply into your email app and hit send yourself."
   ],
@@ -6890,6 +7362,90 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13594961",
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "Sorts what needs a reply today and drafts warm replies in your own voice.",
+  "narrative": "You paste in the emails you've been putting off and tell your helper, in one casual sentence each, roughly what you want to say. It writes warm, natural replies that sound like you — no stiff corporate jargon — and flags anything suspicious, like a phishing link or an urgent payment request, before anything else happens. Every draft waits for your review; you copy it into your email and click send yourself.",
+  "questions": [
+   {
+    "id": "what-piles-up",
+    "label": "What piles up",
+    "prompt": "Which emails do you tend to put off?",
+    "type": "multiChips",
+    "options": [
+     "Bills and money",
+     "Work threads",
+     "Family and personal",
+     "Anything needing a hard reply",
+     "Forms and paperwork",
+     "Other"
+    ],
+    "allowOther": true,
+    "required": false,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "batch-size",
+    "label": "How many emails per sitting",
+    "prompt": "How many of your toughest emails should your helper draft replies for in one sitting?",
+    "type": "choice",
+    "options": [
+     "5",
+     "3",
+     "Just 1 to start"
+    ],
+    "required": true,
+    "default": "5",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "triage-time",
+    "label": "When you do your email sessions",
+    "prompt": "When do you want to sit down with your inbox? Sessions take about 10 minutes.",
+    "type": "choice",
+    "options": [
+     "Each morning, about 10 minutes",
+     "Tuesday and Thursday afternoons",
+     "Whenever I bring you emails — no set time"
+    ],
+    "required": true,
+    "default": "Each morning, about 10 minutes",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "reply-voice",
+    "label": "The voice your replies are drafted in",
+    "prompt": "How should your drafted replies sound?",
+    "type": "choice",
+    "options": [
+     "Warm and natural, like I talk — no stiff corporate jargon",
+     "Short and to the point",
+     "Friendly but formal"
+    ],
+    "required": true,
+    "default": "Warm and natural, like I talk — no stiff corporate jargon",
+    "mapsTo": "do"
+   },
+   {
+    "id": "always-never",
+    "label": "Anything replies should always include or avoid",
+    "prompt": "Anything your helper should always include in your replies — a sign-off, a phrase — or anything it should always avoid? One or two lines is plenty.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "suspicious-mail",
+    "label": "Suspicious emails",
+    "prompt": "If an email has a suspicious link or an urgent payment request, what should your helper do?",
+    "type": "choice",
+    "options": [
+     "Stop and flag it to me first",
+     "Draft the reply but warn me at the top"
+    ],
+    "required": true,
+    "default": "Stop and flag it to me first",
+    "mapsTo": "stop_if"
+   }
   ]
  },
  {
@@ -6897,7 +7453,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Family Budget Tool",
   "audience": "personal",
   "category": "Life admin",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want a calm monthly picture of our household spending and upcoming big expenses without wrestling with complex spreadsheet formulas.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A simple 4-bucket household plan (Essentials, Upcoming Projects, Fun/Travel, Savings) with clear monthly targets.",
@@ -6913,11 +7469,10 @@ export const TEMPLATE_RECORDS: any[] = [
     "Do not give speculative investment picks; focus on practical household budgeting."
    ],
    "ask_me_before": [
-    "Moving from budgeting into investments: no speculative picks, stay with practical household budgeting."
+    "Before suggesting any change to my savings or investments."
    ],
    "report_back": [
-    "A simple 4-bucket household plan (Essentials, Upcoming Projects, Fun/Travel, Savings) with clear monthly targets.",
-    "Monthly on the 1st of the month."
+    "A simple 4-bucket household plan (Essentials, Upcoming Projects, Fun/Travel, Savings) with clear monthly targets."
    ],
    "stop_if": [
     "I share an account number, password or brokerage login: stop and remind me to remove it."
@@ -7832,6 +8387,63 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "A calm monthly snapshot of household spending, sorted into four simple buckets.",
+  "narrative": "Once a month, your helper lays out your household money in four simple buckets — Essentials, Upcoming Projects, Fun/Travel, and Savings — each with a clear monthly target. You share your rough fixed bills and the big expenses ahead, and it works out how much to set aside each month so nothing catches you off guard. The math stays plain, the tables stay clear, and the tone stays free of judgment.",
+  "questions": [
+   {
+    "id": "fixed-bills",
+    "label": "Your monthly fixed bills",
+    "prompt": "Let's start with the steady bills. What are your rough monthly fixed costs — rent or mortgage, utilities, insurance, a car payment, anything like that? Ballpark numbers are fine.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "everyday-spending",
+    "label": "Everyday spending",
+    "prompt": "About how much does your household spend in a typical month on everyday things — groceries, gas, eating out, the little stuff?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "big-expenses",
+    "label": "Big expenses coming up",
+    "prompt": "What big expenses are coming up this year that you want to be ready for — holidays, car tires, a trip, anything else?",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "check-in-day",
+    "label": "Monthly check-in day",
+    "prompt": "Your budget check-in happens once a month. Which day suits you best?",
+    "type": "choice",
+    "options": [
+     "1st of the month",
+     "15th of the month",
+     "Last day of the month"
+    ],
+    "allowOther": true,
+    "required": true,
+    "default": "1st of the month",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "plan-format",
+    "label": "How your plan comes back",
+    "prompt": "When your helper lays out the month, how would you like to see it?",
+    "type": "choice",
+    "options": [
+     "A simple table",
+     "A short written summary",
+     "Both"
+    ],
+    "required": false,
+    "default": "A simple table",
+    "mapsTo": "report_back"
+   }
   ]
  },
  {
@@ -7839,7 +8451,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Calendar Prep Agent",
   "audience": "personal",
   "category": "Planning and travel",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "Before any important doctor visit, financial meeting, or contractor walk-through, I want a 1-page prep sheet of what to bring and the best questions to ask.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "You walk into every appointment with 5 smart questions written down and every document you need in your folder.",
@@ -7849,9 +8461,8 @@ export const TEMPLATE_RECORDS: any[] = [
    "do": [
     "When I tell you about an upcoming doctor visit, contractor estimate, or advisor meeting, help me prepare.",
     "List what documents or notes to bring.",
-    "Give me the 5 smartest, clearest questions I should ask.",
-    "List the red flags to listen for.",
-    "Prepare questions for my doctor or advisor."
+    "Give me the 5 smartest, clearest questions to ask my doctor or advisor.",
+    "List the red flags to listen for."
    ],
    "do_not": [
     "Never replace professional medical or legal advice.",
@@ -8796,6 +9407,79 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "A one-page prep sheet before big appointments: what to bring and what to ask.",
+  "narrative": "Before a big appointment, your helper builds you a one-page prep sheet: the documents to bring, the five smartest questions to ask, and the red flags to listen for. You walk in with your questions written down and everything you need in your folder. Your helper gets you ready — and leaves the medical and legal answers to your doctor or advisor.",
+  "questions": [
+   {
+    "id": "appointment-types",
+    "label": "Appointments to prepare for",
+    "prompt": "What kinds of appointments should your helper help you prepare for?",
+    "type": "multiChips",
+    "options": [
+     "Doctor visit",
+     "Financial or advisor meeting",
+     "Contractor walk-through"
+    ],
+    "allowOther": true,
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "standing-concerns",
+    "label": "Things you want to cover",
+    "prompt": "Is there anything you usually want to make sure gets covered — ongoing symptoms, concerns, or questions you always mean to ask? Your helper will work these into each prep sheet.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "prep-timing",
+    "label": "When your prep sheet is ready",
+    "prompt": "When would you like your prep sheet ready before an appointment?",
+    "type": "choice",
+    "options": [
+     "The evening before",
+     "Two evenings before",
+     "The morning of the appointment"
+    ],
+    "required": true,
+    "default": "The evening before",
+    "followUp": {
+     "when": "The evening before",
+     "prompt": "What time in the evening works — right after dinner, or later?"
+    },
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "prep-focus",
+    "label": "What matters most on the sheet",
+    "prompt": "Every prep sheet has what to bring, five smart questions, and red flags to listen for. Which part matters most to you?",
+    "type": "choice",
+    "options": [
+     "The questions to ask",
+     "What to bring",
+     "Red flags to listen for",
+     "All three equally"
+    ],
+    "required": false,
+    "default": "All three equally",
+    "mapsTo": "do"
+   },
+   {
+    "id": "sheet-format",
+    "label": "How you'll use the prep sheet",
+    "prompt": "How will you use the prep sheet at the appointment?",
+    "type": "choice",
+    "options": [
+     "Print it and take it along",
+     "Keep it on my phone",
+     "Both"
+    ],
+    "required": false,
+    "default": "Both",
+    "mapsTo": "report_back"
+   }
   ]
  },
  {
@@ -8803,7 +9487,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Meal Planner with Grocery List",
   "audience": "personal",
   "category": "Family and home",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want 4 or 5 easy, healthy dinners planned for the week with a grocery list organized by store aisle in under 10 minutes.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "A weekly dinner plan and an aisle-by-aisle grocery list on your phone before you head to Publix or Trader Joe’s.",
@@ -9751,6 +10435,97 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data",
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592"
+  ],
+  "shortDescription": "Four or five easy dinners for the week, plus one grocery list sorted by aisle.",
+  "narrative": "Each week, your helper suggests easy, healthy dinners built around ingredients that overlap, so nothing goes to waste. Once you approve the meals, it builds a single grocery list grouped by store section, ready on your phone before you head to the store. Your helper never orders for you — the checkout is always yours.",
+  "questions": [
+   {
+    "id": "dinners-per-week",
+    "label": "Dinners per week",
+    "prompt": "How many dinners should your helper plan each week?",
+    "type": "choice",
+    "options": [
+     "4 dinners",
+     "5 dinners"
+    ],
+    "allowOther": true,
+    "required": true,
+    "default": "4 dinners",
+    "mapsTo": "goal"
+   },
+   {
+    "id": "dietary-limits",
+    "label": "Allergies and diet limits",
+    "prompt": "Does anyone eating these dinners have a food allergy, a sodium limit, or a doctor-recommended diet? Your helper will always respect it.",
+    "type": "multiChips",
+    "options": [
+     "Food allergy",
+     "Low sodium",
+     "Doctor-recommended diet",
+     "None of these"
+    ],
+    "allowOther": true,
+    "required": true,
+    "default": [
+     "None of these"
+    ],
+    "followUp": {
+     "when": "Food allergy",
+     "prompt": "Which foods must never show up in a dinner?"
+    },
+    "mapsTo": "do_not"
+   },
+   {
+    "id": "who-you-cook-for",
+    "label": "Who you're cooking for",
+    "prompt": "Who are you cooking for — just yourself, you and a partner, a bigger household?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "your-store",
+    "label": "Where you shop",
+    "prompt": "Where do you usually do the big grocery shop? Your helper groups the list by that store's sections.",
+    "type": "choice",
+    "options": [
+     "Publix",
+     "Trader Joe's"
+    ],
+    "allowOther": true,
+    "required": false,
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "planning-day",
+    "label": "Planning day",
+    "prompt": "Which day should your helper plan the week's dinners, before you shop?",
+    "type": "days",
+    "options": [
+     "Monday",
+     "Tuesday",
+     "Wednesday",
+     "Thursday",
+     "Friday",
+     "Saturday",
+     "Sunday"
+    ],
+    "required": true,
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "use-what-you-have",
+    "label": "Use up what's on hand",
+    "prompt": "Each week, would you like to start by telling your helper what's already in the fridge that needs using up, so dinners are built around it?",
+    "type": "choice",
+    "options": [
+     "Yes — start with what I have",
+     "No — plan fresh each week"
+    ],
+    "required": false,
+    "default": "Yes — start with what I have",
+    "mapsTo": "do"
+   }
   ]
  },
  {
@@ -9758,7 +10533,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Pantry Tracker",
   "audience": "personal",
   "category": "Family and home",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to know what staples are in my pantry and freezer so I stop buying a fourth jar of cumin and use food before it expires.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A clean inventory of your freezer and pantry staples, plus quick alerts on what to use up this month.",
@@ -10684,6 +11459,75 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://community.openai.com/t/read-aloud-feature-hidden/1393959",
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592"
+  ],
+  "shortDescription": "A running list of your pantry and freezer staples, with use-it-up-soon alerts.",
+  "narrative": "Your helper keeps a running list of what's in your pantry, spice cabinet, and freezer, so you stop buying duplicates of what you already have. Ask \"Do I have chicken broth?\" and it checks the list for you. Twice a month you spend about five minutes updating it together, and your helper flags what to use up soon.",
+  "questions": [
+   {
+    "id": "spaces-tracked",
+    "label": "What gets tracked",
+    "prompt": "Which spaces should your helper keep track of?",
+    "type": "multiChips",
+    "options": [
+     "Pantry",
+     "Spice cabinet",
+     "Freezer"
+    ],
+    "required": true,
+    "default": [
+     "Pantry",
+     "Spice cabinet",
+     "Freezer"
+    ],
+    "mapsTo": "goal"
+   },
+   {
+    "id": "update-method",
+    "label": "How you'll update the list",
+    "prompt": "When it's time to update the list, how would you rather do it?",
+    "type": "choice",
+    "options": [
+     "Talk it through in voice mode",
+     "Snap photos of the shelves"
+    ],
+    "required": true,
+    "default": "Talk it through in voice mode",
+    "mapsTo": "do"
+   },
+   {
+    "id": "check-in-days",
+    "label": "Twice-a-month check-in days",
+    "prompt": "Your pantry check-in takes about five minutes, twice a month. Which days work for you?",
+    "type": "choice",
+    "options": [
+     "The 1st and 15th",
+     "The 1st and the last day of the month"
+    ],
+    "allowOther": true,
+    "required": true,
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "use-up-alerts",
+    "label": "Use-it-up alerts",
+    "prompt": "At each check-in, should your helper flag what needs to be used up soon?",
+    "type": "choice",
+    "options": [
+     "Yes — flag what to use up first",
+     "Only when I ask"
+    ],
+    "required": false,
+    "default": "Yes — flag what to use up first",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "always-stocked",
+    "label": "Staples to keep an eye on",
+    "prompt": "Any staples you always want to keep stocked — or that you keep buying twice by accident?",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   }
   ]
  },
  {
@@ -10691,7 +11535,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Morning Brief on Chosen Topics",
   "audience": "personal",
   "category": "Staying informed",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want a clean written morning digest covering my town, my hobbies, and the world events I care about — in 5 minutes flat.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "A calm, well-formatted morning newsletter written just for one reader: you.",
@@ -10710,8 +11554,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Adding a topic I did not choose."
    ],
    "report_back": [
-    "A calm, well-formatted morning newsletter written just for me.",
-    "Every morning or weekday mornings."
+    "A calm, well-formatted morning newsletter written just for me."
    ],
    "stop_if": [
     "An item has no source link to the original article: leave it out."
@@ -11566,6 +12409,79 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "A short written morning digest on the topics you pick — town, hobbies, world.",
+  "narrative": "Each morning, your helper writes a short digest just for you — your town, your hobbies, and the world events you chose — in about five minutes of reading. Every topic gets a few clear, factual bullet points with links to the original stories. Nothing gets added that you didn't choose, and anything without a source link is left out.",
+  "questions": [
+   {
+    "id": "topics",
+    "label": "Your topics",
+    "prompt": "What should your Morning Brief cover? Pick any of these, or name your own.",
+    "type": "multiChips",
+    "options": [
+     "My town — local news and city hall",
+     "College baseball",
+     "National parks",
+     "Breakthroughs in medicine",
+     "World events"
+    ],
+    "allowOther": true,
+    "required": true,
+    "followUp": {
+     "when": "My town — local news and city hall",
+     "prompt": "Which town should your helper follow?"
+    },
+    "mapsTo": "goal"
+   },
+   {
+    "id": "brief-days",
+    "label": "Which mornings",
+    "prompt": "Which mornings should your brief arrive?",
+    "type": "choice",
+    "options": [
+     "Every morning",
+     "Weekday mornings"
+    ],
+    "required": true,
+    "default": "Weekday mornings",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "brief-time",
+    "label": "Ready by",
+    "prompt": "What time should your brief be ready for you?",
+    "type": "time",
+    "required": true,
+    "default": "7:00 AM",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "bullets-per-topic",
+    "label": "Length per topic",
+    "prompt": "How much detail do you want on each topic?",
+    "type": "choice",
+    "options": [
+     "2 bullet points",
+     "3 bullet points",
+     "5 bullet points"
+    ],
+    "required": true,
+    "default": "3 bullet points",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "tone",
+    "label": "Tone",
+    "prompt": "How should your brief sound?",
+    "type": "choice",
+    "options": [
+     "Calm and factual",
+     "Warm and friendly"
+    ],
+    "required": false,
+    "default": "Calm and factual",
+    "mapsTo": "do"
+   }
   ]
  },
  {
@@ -11573,7 +12489,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Reading Curator",
   "audience": "personal",
   "category": "Staying informed",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want thoughtful book and long-form article recommendations based on what I actually loved reading, without getting trapped in an algorithm.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A personal reading list with spoiler-free descriptions telling you *why* each book or essay fits your taste.",
@@ -11593,8 +12509,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Sharing any detail that could spoil a book's plot or ending."
    ],
    "report_back": [
-    "A personal reading list with spoiler-free descriptions telling you *why* each book or essay fits your taste.",
-    "Whenever you finish a book or want weekend reading."
+    "A personal reading list with spoiler-free descriptions telling you *why* each book or essay fits your taste."
    ],
    "stop_if": [
     "You cannot verify that a title and its author are real: say so and leave it off the list."
@@ -12477,6 +13392,81 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/17004136",
    "https://support.google.com/gemini/answer/16275805",
    "https://support.google.com/gemini/answer/13594961"
+  ],
+  "shortDescription": "Thoughtful next reads matched to the books and essays you actually loved.",
+  "narrative": "When you finish a book or want something for the weekend, your helper suggests thoughtful next reads based on what you actually loved. Each pick comes with a spoiler-free note on why it fits your taste, plus a warning about anything you tend to dislike.",
+  "questions": [
+   {
+    "id": "loved-books",
+    "label": "Books and authors you loved",
+    "prompt": "Tell me 3 books or authors you loved — the ones you'd happily read again.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "put-downs",
+    "label": "Things that make you put a book down",
+    "prompt": "What makes you put a book down? Name 1 or 2 things, so your helper can warn you before suggesting anything like them.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "do_not"
+   },
+   {
+    "id": "reading-mix",
+    "label": "Books, articles, or both",
+    "prompt": "Should your helper suggest books, long-form articles and essays, or a mix of both?",
+    "type": "choice",
+    "options": [
+     "Books",
+     "Long-form articles and essays",
+     "A mix of both"
+    ],
+    "required": true,
+    "default": "A mix of both",
+    "mapsTo": "goal"
+   },
+   {
+    "id": "how-many-picks",
+    "label": "How many suggestions at a time",
+    "prompt": "How many suggestions would you like in each reading list?",
+    "type": "choice",
+    "options": [
+     "3",
+     "5",
+     "7"
+    ],
+    "required": true,
+    "default": "5",
+    "mapsTo": "report_back"
+   },
+   {
+    "id": "when-to-ask",
+    "label": "When you'll ask for picks",
+    "prompt": "When do you want to use this most — when you finish a book, when you want weekend reading, or both?",
+    "type": "choice",
+    "options": [
+     "When I finish a book",
+     "When I want weekend reading",
+     "Both"
+    ],
+    "required": true,
+    "default": "Both",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "library-check",
+    "label": "Local library check",
+    "prompt": "Would you like a reminder to check which picks are at your local library?",
+    "type": "choice",
+    "options": [
+     "Yes, remind me to check my local library",
+     "No, just the list"
+    ],
+    "required": false,
+    "default": "Yes, remind me to check my local library",
+    "mapsTo": "report_back"
+   }
   ]
  },
  {
@@ -12484,7 +13474,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Patient Tutor with a Study Plan",
   "audience": "personal",
   "category": "Learning and career",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to learn a new skill — Spanish for travel, bridge, photography, local history, or Excel — with a tutor that never gets impatient if I ask the same question three times.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "A 4-week bite-sized learning plan where each session takes 15 minutes and picks up right where you left off.",
@@ -12506,8 +13496,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Moving on to the next step: check that I feel comfortable first."
    ],
    "report_back": [
-    "A 4-week bite-sized learning plan where each session takes 15 minutes and picks up right where you left off.",
-    "2 to 3 times a week for 15 minutes."
+    "A 4-week bite-sized learning plan where each session takes 15 minutes and picks up right where you left off."
    ],
    "stop_if": [
     "A reply is turning into a wall of text: stop and break it into a smaller step."
@@ -12515,7 +13504,7 @@ export const TEMPLATE_RECORDS: any[] = [
   },
   "steps": [
    "Step 1 (10 mins): Tell your helper what you want to learn and why (e.g., \"Conversational Italian before our autumn trip\").",
-   "Step 2 (10 mins): Try your first 10-minute interactive lesson and tell it to slow down or speed up as needed."
+   "Step 2 (10 mins): Try your first 15-minute interactive lesson and tell it to slow down or speed up as needed."
   ],
   "platformLayers": {
    "muse": {
@@ -13414,6 +14403,73 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15229592",
    "https://support.google.com/gemini/answer/17004136"
+  ],
+  "shortDescription": "A patient tutor that builds a 4-week plan in short, bite-sized sessions.",
+  "narrative": "Your helper turns the skill you want into a 4-week plan of 15-minute sessions, two to three times a week. Each session picks up right where you left off, goes at your pace, and ends with a short summary and a progress note — and your helper never gets impatient, however many times you ask.",
+  "questions": [
+   {
+    "id": "what-to-learn",
+    "label": "What you want to learn, and why",
+    "prompt": "What would you like to learn, and why? For example, conversational Spanish for travel, bridge, photography, local history, or Excel.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "starting-point",
+    "label": "Where you're starting from",
+    "prompt": "How much do you already know about it?",
+    "type": "choice",
+    "options": [
+     "Brand new to it",
+     "I know a little",
+     "I have some experience"
+    ],
+    "required": true,
+    "default": "Brand new to it",
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "sessions-per-week",
+    "label": "Sessions each week",
+    "prompt": "Your plan runs 4 weeks, in 15-minute sessions. How many sessions a week suits you?",
+    "type": "choice",
+    "options": [
+     "2 times a week",
+     "3 times a week"
+    ],
+    "required": true,
+    "default": "3 times a week",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "time-of-day",
+    "label": "Best time of day for a session",
+    "prompt": "What time of day suits a short session best?",
+    "type": "choice",
+    "options": [
+     "Morning",
+     "Afternoon",
+     "Evening"
+    ],
+    "required": false,
+    "default": "Morning",
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "pace",
+    "label": "Your pace",
+    "prompt": "How should your helper pace things? It will always check you're comfortable before moving on to the next step.",
+    "type": "choice",
+    "options": [
+     "Slow and steady — check often",
+     "A steady pace",
+     "Move a bit faster when I get it quickly"
+    ],
+    "required": true,
+    "default": "Slow and steady — check often",
+    "mapsTo": "ask_me_before"
+   }
   ]
  },
  {
@@ -13421,7 +14477,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "title": "Job Hunt Helper",
   "audience": "personal",
   "category": "Learning and career",
-  "version": 4,
+  "version": 5,
   "goalInOneSentence": "I want to organize my job or consulting search, highlight my real experience clearly for each role, and walk into interviews feeling prepared.",
   "experienceLevel": "Beginner to Intermediate",
   "whatDoneLooksLike": "An updated master resume, tailored cover notes that sound human, and a tracker of every application and follow-up date.",
@@ -13442,8 +14498,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "Any job application goes in: I review and submit every one myself."
    ],
    "report_back": [
-    "An updated master resume, tailored cover notes that sound human, and a tracker of every application and follow-up date.",
-    "Twice a week during an active job search."
+    "An updated master resume, tailored cover notes that sound human, and a tracker of every application and follow-up date."
    ],
    "stop_if": [
     "A step would submit an application, or claim a skill or credential I did not give you: stop and hand it back to me."
@@ -14381,6 +15436,87 @@ export const TEMPLATE_RECORDS: any[] = [
    "https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data",
    "https://support.google.com/gemini/answer/13275745",
    "https://support.google.com/gemini/answer/15230597"
+  ],
+  "shortDescription": "Organizes your search, sharpens your resume, and preps you for interviews.",
+  "narrative": "Your helper helps you turn your real experience into clear resume points and natural cover notes, tailored to each role you paste in. You get an updated master resume and a tracker of every application and follow-up date, and you review and submit every application yourself.",
+  "questions": [
+   {
+    "id": "search-type",
+    "label": "Job, consulting, or both",
+    "prompt": "Are you looking for a job, consulting work, or both?",
+    "type": "choice",
+    "options": [
+     "A job",
+     "Consulting work",
+     "Both"
+    ],
+    "required": true,
+    "default": "A job",
+    "mapsTo": "goal"
+   },
+   {
+    "id": "target-roles",
+    "label": "Roles you're aiming for",
+    "prompt": "What kinds of roles are you aiming for? You can also paste a job description later, and your helper will show how your experience matches it truthfully.",
+    "type": "text",
+    "required": true,
+    "mapsTo": "goal"
+   },
+   {
+    "id": "resume-start",
+    "label": "Your starting resume",
+    "prompt": "Where are we starting from with your resume?",
+    "type": "choice",
+    "options": [
+     "I have a resume to paste in and update",
+     "I have one, but it's out of date",
+     "I need to build one from my experience"
+    ],
+    "required": true,
+    "default": "I have a resume to paste in and update",
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "experience-highlights",
+    "label": "Experience to highlight",
+    "prompt": "Tell me about accomplishments or experience you want highlighted — especially anything that isn't written down on your resume yet.",
+    "type": "text",
+    "required": false,
+    "mapsTo": "memberNotes"
+   },
+   {
+    "id": "check-in-days",
+    "label": "Twice-weekly check-in days",
+    "prompt": "Your helper checks in twice a week during an active search, to review your applications and follow-up dates. Which two days suit you?",
+    "type": "days",
+    "options": [
+     "Monday",
+     "Tuesday",
+     "Wednesday",
+     "Thursday",
+     "Friday"
+    ],
+    "required": true,
+    "default": [
+     "Tuesday",
+     "Friday"
+    ],
+    "mapsTo": "schedule"
+   },
+   {
+    "id": "interview-prep",
+    "label": "How you'd like to prep for interviews",
+    "prompt": "When an interview comes up, how would you like to practice?",
+    "type": "choice",
+    "options": [
+     "Practice likely questions out loud",
+     "Get written practice questions",
+     "Both"
+    ],
+    "required": true,
+    "default": "Practice likely questions out loud",
+    "mapsTo": "report_back"
+   }
   ]
  }
 ];

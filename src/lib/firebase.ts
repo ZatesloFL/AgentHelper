@@ -180,7 +180,7 @@ export interface UserProjectDoc {
   product?: string;
   contract: TaskContractFields;
   rung: 0 | 1 | 2 | 3;
-  status: 'active' | 'paused' | 'needs_setup';
+  status: 'active' | 'paused' | 'needs_setup' | 'ready';
   // Track 3 (four paths / three lanes): how this project started, what the
   // member bought (lane), gift + brainstorm context, and intake progress.
   startedAs?: ProjectStartedAs;
@@ -1276,8 +1276,14 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
   if (doesContractDoRestrictPastRung2(contract.do) && rung > 2) {
     rung = 2;
   }
-  const status: 'active' | 'paused' | 'needs_setup' =
-    d?.status === 'paused' ? 'paused' : d?.status === 'needs_setup' ? 'needs_setup' : 'active';
+  const status: 'active' | 'paused' | 'needs_setup' | 'ready' =
+    d?.status === 'paused'
+      ? 'paused'
+      : d?.status === 'needs_setup'
+        ? 'needs_setup'
+        : d?.status === 'ready'
+          ? 'ready'
+          : 'active';
   const createdAt = toIsoString(d?.createdAt || d?.updatedAt || nowIso);
   const updatedAt = toIsoString(d?.updatedAt || nowIso);
   const rawHistory = Array.isArray(d?.history) ? d.history : [];
@@ -1471,6 +1477,23 @@ export interface TemplateContractDraft {
   stop_if?: string | string[];
 }
 
+/** One guided-intake question from a template's `questions` block
+ * (Project Setup Flow Redesign Spec section 5). Answers fill the contract
+ * deterministically: chip/choice answers append a labeled line to the
+ * section they map to; text answers are member data (memberNotes). */
+export interface TemplateQuestion {
+  id: string;
+  label: string;
+  prompt: string;
+  type: 'chips' | 'multiChips' | 'text' | 'time' | 'days' | 'number' | 'choice';
+  options?: string[];
+  allowOther?: boolean;
+  required: boolean;
+  default?: any;
+  followUp?: { when: string; prompt: string };
+  mapsTo: 'goal' | 'do' | 'do_not' | 'ask_me_before' | 'report_back' | 'stop_if' | 'schedule' | 'memberNotes' | 'doneLooksLike';
+}
+
 export interface TemplateDoc {
   slug: string;
   title: string;
@@ -1486,6 +1509,9 @@ export interface TemplateDoc {
   platformLayers?: Record<string, TemplateLayer | string>;
   knownIssues?: Record<string, TemplateLayerClaim[]>;
   lastVerified?: string;
+  shortDescription?: string;
+  narrative?: string;
+  questions?: TemplateQuestion[];
 }
 
 /** Map raw Firestore/record data onto a TemplateDoc (shared by the Firestore
@@ -1510,6 +1536,14 @@ export function templateDocFromData(slug: string, d: any): TemplateDoc {
       d?.platformLayers && typeof d.platformLayers === 'object' ? d.platformLayers : undefined,
     knownIssues: d?.knownIssues && typeof d.knownIssues === 'object' ? d.knownIssues : undefined,
     lastVerified: typeof d?.lastVerified === 'string' ? d.lastVerified : undefined,
+    shortDescription: typeof d?.shortDescription === 'string' ? d.shortDescription : undefined,
+    narrative: typeof d?.narrative === 'string' ? d.narrative : undefined,
+    questions: Array.isArray(d?.questions)
+      ? (d.questions.filter(
+          (q: any) =>
+            q && typeof q === 'object' && typeof q.id === 'string' && typeof q.prompt === 'string'
+        ) as TemplateQuestion[])
+      : undefined,
   };
 }
 
@@ -1633,7 +1667,7 @@ export async function saveUserProjectContract(
     product?: string;
     contract: TaskContractFields;
     rung: number;
-    status?: 'active' | 'paused' | 'needs_setup';
+    status?: 'active' | 'paused' | 'needs_setup' | 'ready';
   }
 ): Promise<UserProjectDoc> {
   const cleanId = String(projectId || '').trim() || 'first-task';
@@ -1665,7 +1699,8 @@ export async function saveUserProjectContract(
   }
 
   const createdAt = existing?.createdAt || nowIso;
-  const status: 'active' | 'paused' | 'needs_setup' = data.status || existing?.status || 'active';
+  const status: 'active' | 'paused' | 'needs_setup' | 'ready' =
+    data.status || existing?.status || 'active';
   const prevHistory = existing?.history ? [...existing.history] : [];
   const lastHistoryRung =
     prevHistory.length > 0 ? prevHistory[prevHistory.length - 1].rung : null;
