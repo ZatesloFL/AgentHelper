@@ -7,6 +7,8 @@
 // Source of truth for content: Basic Memory
 // projects/second-look-template-layers/. Import to Firestore from the
 // Admin console (POST /api/admin/templates/import).
+// 2026-10-29 patch (redesign spec section 10): daily-news-podcast
+// contract wording fixes — see records-staging/PATCHES-2026-10-29.md.
 
 export const TEMPLATE_RECORDS: any[] = [
  {
@@ -15,12 +17,12 @@ export const TEMPLATE_RECORDS: any[] = [
   "audience": "personal",
   "category": "Planning and travel",
   "version": 4,
-  "goalInOneSentence": "I want to plan a memorable trip \u2014 whether a dream trip to Egypt or a week in the mountains \u2014 with a realistic pace, rest time, and a complete packing and document checklist.",
+  "goalInOneSentence": "I want to plan a memorable trip — whether a dream trip to Egypt or a week in the mountains — with a realistic pace, rest time, and a complete packing and document checklist.",
   "experienceLevel": "Beginner",
   "whatDoneLooksLike": "A day-by-day itinerary with morning and afternoon options, hotel neighborhood advice, visa/passport checklist, and a printable summary.",
   "checkInRhythm": "Weekly while planning a trip; daily quick brief while traveling.",
   "contract": {
-   "goal": "I want to plan a memorable trip \u2014 whether a dream trip to Egypt or a week in the mountains \u2014 with a realistic pace, rest time, and a complete packing and document checklist.",
+   "goal": "I want to plan a memorable trip — whether a dream trip to Egypt or a week in the mountains — with a realistic pace, rest time, and a complete packing and document checklist.",
    "do": [
     "Design a well-paced, realistic itinerary tailored to my energy level and interests.",
     "Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when.",
@@ -87,7 +89,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Muse does not keep the rules, paste the helper text at the start of each session.",
-    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself \u2014 always present options for me to choose.",
+    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself — always present options for me to choose.",
     "memberSteps": [
      "Open a new side chat in Muse and paste the Trip Planner text.",
      "Tell Muse: \"Remember these as the rules for my Trip Planner helper. Never book, reserve or pay for anything.\"",
@@ -232,7 +234,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If neither Projects nor Skills appears: paste the helper text at the start of each chat. A global option, Settings > Customize Grok (custom instructions), is reported but not vendor-documented.",
-    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself \u2014 always present options for me to choose.",
+    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself — always present options for me to choose.",
     "memberSteps": [
      "Set up the Trip Planner as a Project or a Skill in Grok (see setup).",
      "Tell Grok where, who, pace and budget, then review the route.",
@@ -273,7 +275,7 @@ export const TEMPLATE_RECORDS: any[] = [
       ]
      },
      {
-      "text": "Grok 'may give confidently wrong information\u2026 Verify important answers.'",
+      "text": "Grok 'may give confidently wrong information… Verify important answers.'",
       "tag": "vendor-stated",
       "sources": [
        "https://help.x.com/en/using-x/about-grok"
@@ -374,7 +376,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "None needed: Projects work on every plan. If the member cannot find Projects, paste the helper text into Settings > Personalization > Custom Instructions (applies to every chat) or at the start of each chat.",
-    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself \u2014 always present options for me to choose.",
+    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself — always present options for me to choose.",
     "memberSteps": [
      "Create a Project called \"Trip\" and paste the Trip Planner text as its instructions.",
      "Upload confirmations into the project as you book (Free plans allow 5 files per project).",
@@ -517,7 +519,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If a Free account has no project instructions field: paste the helper text into the account's profile preferences in Settings (applies to every chat; plan gate not stated) or at the start of each chat.",
-    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself \u2014 always present options for me to choose.",
+    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself — always present options for me to choose.",
     "memberSteps": [
      "Create a Project called \"Trip\" and paste the Trip Planner text as its instructions.",
      "Upload confirmations into the project as you book.",
@@ -691,7 +693,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Keep Activity is off, skills and Connected Apps don't work: paste the helper text at the start of each chat. Under-18 accounts can't use skills yet. On a work account, use a Gem (Sidebar > Gems > New Gem) until Google moves work accounts to skills; Gems there last until at least 2027-03-01.",
-    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself \u2014 always present options for me to choose.",
+    "pasteText": "You are my personal Trip Planner. Help me design a well-paced, realistic itinerary tailored to my energy level and interests. Include travel times between stops, quiet neighborhood hotel suggestions, local scams to avoid, and a timeline of what to book when. Never book or charge anything yourself — always present options for me to choose.",
     "memberSteps": [
      "Check which Google account you're signed in with (tap your profile picture). A personal Gmail account can use skills; a work or school account can't yet, so ask Second Look for the work-account steps.",
      "Make the Trip Planner skill (Customize > Skills > Create > Create manually) with the helper text. Add one always-on line in Settings & help > Personal Intelligence > Instructions for Gemini: \"Never book, reserve or pay for anything; give me links and options instead.\"",
@@ -1040,7 +1042,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "category": "Start with these",
   "version": 4,
   "goalInOneSentence": "I want to appeal a rejected insurance claim or confusing medical bill without spending hours on hold or missing a deadline.",
-  "experienceLevel": "Complete beginner \u2014 no prior AI experience needed.",
+  "experienceLevel": "Complete beginner — no prior AI experience needed.",
   "whatDoneLooksLike": "You have a clear checklist of why the claim was denied, a polite and firm appeal letter citing the exact policy codes ready to mail or upload, and a calendar reminder to follow up in 14 days.",
   "checkInRhythm": "Every 7 days until the appeal is submitted, then a 14-day follow-up prompt to check claim status.",
   "contract": {
@@ -1048,7 +1050,7 @@ export const TEMPLATE_RECORDS: any[] = [
    "do": [
     "Help me understand why this bill or claim was denied in plain English.",
     "Ask me one question at a time about the denial code, date of service, and what my doctor recommended.",
-    "List the 2\u20133 documents the insurer needs and give me a checklist of attachments to include.",
+    "List the 2–3 documents the insurer needs and give me a checklist of attachments to include.",
     "Draft a clear, respectful, firm appeal letter that I can review and send myself.",
     "Remind me to verify any medical procedure codes (CPT codes) with my doctor's billing office before mailing."
    ],
@@ -1069,8 +1071,8 @@ export const TEMPLATE_RECORDS: any[] = [
   },
   "steps": [
    "Step 1 (10 mins): Cover your Social Security number and account password, then type or photograph the denial reason code into your AI helper.",
-   "Step 2 (10 mins): Ask your helper to translate the insurance jargon into plain English and list the 2\u20133 documents the insurer needs.",
-   "Step 3 (10 mins): Have your helper draft a calm, factual appeal letter referencing your doctor\u2019s note and the insurer\u2019s own coverage rules.",
+   "Step 2 (10 mins): Ask your helper to translate the insurance jargon into plain English and list the 2–3 documents the insurer needs.",
+   "Step 3 (10 mins): Have your helper draft a calm, factual appeal letter referencing your doctor’s note and the insurer’s own coverage rules.",
    "Step 4 (10 mins): Review the letter yourself, print or submit it, and set a 2-week follow-up reminder with your helper."
   ],
   "platformLayers": {
@@ -2023,7 +2025,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "category": "Start with these",
   "version": 4,
   "goalInOneSentence": "I want one calm Sunday ritual that turns scattered family texts, school flyers, and appointments into a clear weekly plan for everyone.",
-  "experienceLevel": "Beginner \u2014 works great with phone voice mode or text.",
+  "experienceLevel": "Beginner — works great with phone voice mode or text.",
   "whatDoneLooksLike": "Every Sunday at 5pm, you have a clean week-at-a-glance summary ready to paste into the family group text, with ride handoffs and dinner nights settled.",
   "checkInRhythm": "Weekly every Sunday afternoon (or your preferred planning day) plus a mid-week Wednesday glance.",
   "contract": {
@@ -2050,8 +2052,8 @@ export const TEMPLATE_RECORDS: any[] = [
   },
   "steps": [
    "Step 1 (10 mins): Tell your helper who is in your household and what regular weekly routines happen (school, doctor visits, club meetings).",
-   "Step 2 (10 mins): Snap a photo of any paper flyers or paste the week\u2019s chaotic group text details into your helper.",
-   "Step 3 (10 mins): Let the helper spot scheduling conflicts and format a clean Monday\u2013Sunday summary message.",
+   "Step 2 (10 mins): Snap a photo of any paper flyers or paste the week’s chaotic group text details into your helper.",
+   "Step 3 (10 mins): Let the helper spot scheduling conflicts and format a clean Monday–Sunday summary message.",
    "Step 4 (10 mins): Copy the summary into your family text thread after reviewing it."
   ],
   "platformLayers": {
@@ -3019,32 +3021,32 @@ export const TEMPLATE_RECORDS: any[] = [
   "audience": "personal",
   "category": "Start with these",
   "version": 4,
-  "goalInOneSentence": "I want a calm 7-minute morning update on the exact topics I care about \u2014 read aloud while I drink my coffee \u2014 without clickbait or outrage.",
-  "experienceLevel": "Complete beginner \u2014 if you can tap a play button, you can use this.",
+  "goalInOneSentence": "I want a calm 7-minute morning update on the exact topics I care about — read aloud while I drink my coffee — without clickbait or outrage.",
+  "experienceLevel": "Complete beginner — if you can tap a play button, you can use this.",
   "whatDoneLooksLike": "Every morning with coffee, you tap one button and hear a calm, balanced briefing on local Tallahassee news, your favorite sports team, gardening, or science.",
   "checkInRhythm": "Daily each morning with your coffee, with a monthly check-in to refresh your topics.",
   "contract": {
-   "goal": "I want a calm 7-minute morning update on the exact topics I care about \u2014 read aloud while I drink my coffee \u2014 without clickbait or outrage.",
+   "goal": "I want a calm 5-minute morning update on the exact topics I care about — read aloud while I drink my coffee — without clickbait or outrage.",
    "do": [
     "Prepare a calm, factual, 5-minute morning update covering only my chosen topics.",
     "Cite reputable sources for every news item so I can verify facts.",
     "Keep the language clear so it sounds great read aloud.",
-    "End with one interesting historical fact or practical tip for the day."
+    "End with one interesting historical fact or practical tip for the day.",
+    "Leave out any news item that has no reputable source to cite."
    ],
    "do_not": [
-    "Avoid sensationalism, clickbait, or doomscrolling tone.",
-    "Never cover topics on my \"skip list\".",
+    "Never use a sensational, clickbait, or doomscrolling tone.",
+    "Never cover topics I have asked you to skip.",
     "Never sign me up for paid newsletters or external subscriptions."
    ],
    "ask_me_before": [
     "Changing my topic list (we refresh it at the monthly check-in)."
    ],
    "report_back": [
-    "A calm, balanced briefing every morning on my chosen topics.",
-    "Daily each morning with my coffee, with a monthly check-in to refresh my topics."
+    "A calm, balanced briefing every morning on my chosen topics."
    ],
    "stop_if": [
-    "A news item has no reputable source to cite: leave it out."
+    "You are not sure a story is accurate: stop, tell me what is unverified, and let me decide whether it runs."
    ]
   },
   "steps": [
@@ -3366,7 +3368,7 @@ export const TEMPLATE_RECORDS: any[] = [
     "memberSteps": [
      "Create a Project called \"Morning Brief\" with the Morning Brief text, your topics and skip list.",
      "On Plus and up, ask: \"Every morning at 7am, prepare my Morning Brief.\" You get a push notification.",
-     "Open the brief and tap the voice icon to talk, or use Read aloud (now in the \u22ef menu under a reply).",
+     "Open the brief and tap the voice icon to talk, or use Read aloud (now in the ⋯ menu under a reply).",
      "On Free, open the project each morning and ask for today's brief.",
      "Any time, without a schedule: open your \"Morning Brief\" project in ChatGPT and say \"give me my morning news brief\"."
     ],
@@ -4016,7 +4018,7 @@ export const TEMPLATE_RECORDS: any[] = [
    ]
   },
   "steps": [
-   "Step 1 (10 mins): Read off the recurring charges from one recent monthly statement (just the company name, amount, and date \u2014 no card numbers).",
+   "Step 1 (10 mins): Read off the recurring charges from one recent monthly statement (just the company name, amount, and date — no card numbers).",
    "Step 2 (10 mins): Ask your helper to organize them by month and flag any duplicate streaming or software services.",
    "Step 3 (10 mins): Add 30-day advance reminders to your calendar for annual renewals like car insurance, home warranty, or memberships."
   ],
@@ -4058,7 +4060,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Muse does not keep the rules, paste the helper text at the start of each session.",
-    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14\u201330 days prior) to review or cancel it. Never ask for account numbers or passwords.",
+    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14–30 days prior) to review or cancel it. Never ask for account numbers or passwords.",
     "memberSteps": [
      "Open a side chat in Muse, paste the Bill Watcher text, and say: \"Remember these as the rules for my Bill Watcher helper. Never ask for card numbers and never log in to my accounts.\"",
      "Read off each recurring charge from one statement: company, amount, billing cycle and renewal date. No card or account numbers.",
@@ -4202,7 +4204,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If neither Projects nor Skills appears: paste the helper text at the start of each chat. A global option, Settings > Customize Grok (custom instructions), is reported but not vendor-documented.",
-    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14\u201330 days prior) to review or cancel it. Never ask for account numbers or passwords.",
+    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14–30 days prior) to review or cancel it. Never ask for account numbers or passwords.",
     "memberSteps": [
      "Set up Bill Watcher as a Project or a Skill in Grok (see setup), or paste the text at the start of a chat.",
      "Type each charge: company, amount, billing cycle and renewal date. No card numbers.",
@@ -4340,7 +4342,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "None needed: Projects work on every plan. If the member cannot find Projects, paste the helper text into Settings > Personalization > Custom Instructions (applies to every chat) or at the start of each chat.",
-    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14\u201330 days prior) to review or cancel it. Never ask for account numbers or passwords.",
+    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14–30 days prior) to review or cancel it. Never ask for account numbers or passwords.",
     "memberSteps": [
      "Create a Project called \"Bill Watcher\" and paste the Bill Watcher text as its instructions.",
      "Type each charge with no card numbers, then ask for the table by month, the yearly total and any duplicate services.",
@@ -4481,7 +4483,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If a Free account has no project instructions field: paste the helper text into the account's profile preferences in Settings (applies to every chat; plan gate not stated) or at the start of each chat.",
-    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14\u201330 days prior) to review or cancel it. Never ask for account numbers or passwords.",
+    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14–30 days prior) to review or cancel it. Never ask for account numbers or passwords.",
     "memberSteps": [
      "Create a Project called \"Bill Watcher\" and paste the Bill Watcher text as its instructions.",
      "Type each charge, then turn on file creation (Settings > Capabilities) and ask for the tracker as an Excel file with the yearly total.",
@@ -4637,7 +4639,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Keep Activity is off, skills and Connected Apps don't work: paste the helper text at the start of each chat. Under-18 accounts can't use skills yet. On a work account, use a Gem (Sidebar > Gems > New Gem) until Google moves work accounts to skills; Gems there last until at least 2027-03-01.",
-    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14\u201330 days prior) to review or cancel it. Never ask for account numbers or passwords.",
+    "pasteText": "Help me build a clean Subscription & Bill Renewal tracker. When I tell you a service name, amount, and billing cycle, organize it chronologically, calculate the yearly total, and tell me what date I should set a reminder (14–30 days prior) to review or cancel it. Never ask for account numbers or passwords.",
     "memberSteps": [
      "Check which Google account you're signed in with (tap your profile picture). A personal Gmail account can use skills; a work or school account can't yet, so ask Second Look for the work-account steps.",
      "Create the \"Bill Watcher\" skill with the helper text (see setup). In Instructions for Gemini, add: \"Never ask for card numbers, account numbers or passwords, and never cancel anything for me.\"",
@@ -5984,7 +5986,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Muse does not keep the rules, paste the helper text at the start of each session.",
-    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me \u2014 no stiff corporate jargon. Never send emails yourself.",
+    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me — no stiff corporate jargon. Never send emails yourself.",
     "memberSteps": [
      "Open a side chat in Muse, paste the Email Drafts text, and say: \"Remember these as the rules for my Email Drafts helper. Never send email.\"",
      "Paste up to 3 emails you have been putting off, and say in one sentence what you want to say.",
@@ -6126,7 +6128,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If neither Projects nor Skills appears: paste the helper text at the start of each chat. A global option, Settings > Customize Grok (custom instructions), is reported but not vendor-documented.",
-    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me \u2014 no stiff corporate jargon. Never send emails yourself.",
+    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me — no stiff corporate jargon. Never send emails yourself.",
     "memberSteps": [
      "Set up Email Drafts as a Project or a Skill in Grok (see setup), or paste the text at the start of a chat.",
      "Paste up to 3 emails and say in one sentence what you want to say. For a long newsletter, ask for 3 bullet points.",
@@ -6265,7 +6267,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "None needed: Projects work on every plan. If the member cannot find Projects, paste the helper text into Settings > Personalization > Custom Instructions (applies to every chat) or at the start of each chat.",
-    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me \u2014 no stiff corporate jargon. Never send emails yourself.",
+    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me — no stiff corporate jargon. Never send emails yourself.",
     "memberSteps": [
      "Create a Project called \"Email Drafts\" with the Email Drafts text, and paste 2 emails you wrote so it matches your tone.",
      "Paste up to 3 emails and say in one sentence what you want to say.",
@@ -6409,7 +6411,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If a Free account has no project instructions field: paste the helper text into the account's profile preferences in Settings (applies to every chat; plan gate not stated) or at the start of each chat.",
-    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me \u2014 no stiff corporate jargon. Never send emails yourself.",
+    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me — no stiff corporate jargon. Never send emails yourself.",
     "memberSteps": [
      "Create a Project called \"Email Drafts\" with the Email Drafts text, and paste 2 emails you wrote so it matches your voice.",
      "Paste up to 3 emails and say in one sentence what you want to say.",
@@ -6565,7 +6567,7 @@ export const TEMPLATE_RECORDS: any[] = [
      }
     ],
     "fallback": "If Keep Activity is off, skills and Connected Apps don't work: paste the helper text at the start of each chat. Under-18 accounts can't use skills yet. On a work account, use a Gem (Sidebar > Gems > New Gem) until Google moves work accounts to skills; Gems there last until at least 2027-03-01.",
-    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me \u2014 no stiff corporate jargon. Never send emails yourself.",
+    "pasteText": "You are my Email Triage & Drafting Helper. When I share an email and tell you roughly how I want to respond, write a warm, natural reply that sounds like me — no stiff corporate jargon. Never send emails yourself.",
     "memberSteps": [
      "Check which Google account you're signed in with (tap your profile picture). A personal Gmail account can use skills; a work or school account can't yet, so ask Second Look for the work-account steps.",
      "Create the \"Email Drafts\" skill with the helper text, and paste 2 emails you wrote into its instructions so it matches your voice. In Instructions for Gemini, add: \"Never send email for me. Flag phishing links and urgent payment requests first.\"",
@@ -8804,7 +8806,7 @@ export const TEMPLATE_RECORDS: any[] = [
   "version": 4,
   "goalInOneSentence": "I want 4 or 5 easy, healthy dinners planned for the week with a grocery list organized by store aisle in under 10 minutes.",
   "experienceLevel": "Complete beginner",
-  "whatDoneLooksLike": "A weekly dinner plan and an aisle-by-aisle grocery list on your phone before you head to Publix or Trader Joe\u2019s.",
+  "whatDoneLooksLike": "A weekly dinner plan and an aisle-by-aisle grocery list on your phone before you head to Publix or Trader Joe’s.",
   "checkInRhythm": "Once a week before grocery shopping.",
   "contract": {
    "goal": "I want 4 or 5 easy, healthy dinners planned for the week with a grocery list organized by store aisle in under 10 minutes.",
@@ -10690,12 +10692,12 @@ export const TEMPLATE_RECORDS: any[] = [
   "audience": "personal",
   "category": "Staying informed",
   "version": 4,
-  "goalInOneSentence": "I want a clean written morning digest covering my town, my hobbies, and the world events I care about \u2014 in 5 minutes flat.",
+  "goalInOneSentence": "I want a clean written morning digest covering my town, my hobbies, and the world events I care about — in 5 minutes flat.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "A calm, well-formatted morning newsletter written just for one reader: you.",
   "checkInRhythm": "Every morning or weekday mornings.",
   "contract": {
-   "goal": "I want a clean written morning digest covering my town, my hobbies, and the world events I care about \u2014 in 5 minutes flat.",
+   "goal": "I want a clean written morning digest covering my town, my hobbies, and the world events I care about — in 5 minutes flat.",
    "do": [
     "Prepare my personalized Morning Written Brief.",
     "Cover each of my chosen topics in 3 clear, factual bullet points with source links.",
@@ -12483,12 +12485,12 @@ export const TEMPLATE_RECORDS: any[] = [
   "audience": "personal",
   "category": "Learning and career",
   "version": 4,
-  "goalInOneSentence": "I want to learn a new skill \u2014 Spanish for travel, bridge, photography, local history, or Excel \u2014 with a tutor that never gets impatient if I ask the same question three times.",
+  "goalInOneSentence": "I want to learn a new skill — Spanish for travel, bridge, photography, local history, or Excel — with a tutor that never gets impatient if I ask the same question three times.",
   "experienceLevel": "Complete beginner",
   "whatDoneLooksLike": "A 4-week bite-sized learning plan where each session takes 15 minutes and picks up right where you left off.",
   "checkInRhythm": "2 to 3 times a week for 15 minutes.",
   "contract": {
-   "goal": "I want to learn a new skill \u2014 Spanish for travel, bridge, photography, local history, or Excel \u2014 with a tutor that never gets impatient if I ask the same question three times.",
+   "goal": "I want to learn a new skill — Spanish for travel, bridge, photography, local history, or Excel — with a tutor that never gets impatient if I ask the same question three times.",
    "do": [
     "Teach me step by step in 15-minute sessions.",
     "Use plain analogies and encourage my questions.",
@@ -13448,7 +13450,7 @@ export const TEMPLATE_RECORDS: any[] = [
    ]
   },
   "steps": [
-   "Step 1 (10 mins): Paste your existing resume and ask your helper to interview you about accomplishments that aren\u2019t written down yet.",
+   "Step 1 (10 mins): Paste your existing resume and ask your helper to interview you about accomplishments that aren’t written down yet.",
    "Step 2 (10 mins): Paste a job description and ask how to highlight your matching experience truthfully.",
    "Step 3 (10 mins): Practice 5 likely interview questions out loud."
   ],

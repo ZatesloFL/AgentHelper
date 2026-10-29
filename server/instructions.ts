@@ -40,32 +40,146 @@ function publicBase(req: Request): string {
   return `${proto}://${host}`;
 }
 
+// Split a contract field (string with newlines, or an array of lines)
+// into clean lines.
+function toLines(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((v) => toLines(v));
+  }
+  if (typeof value !== 'string') return [];
+  return value
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+function normLine(line: string): string {
+  return line
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Assemble the instruction text from structured project fields only.
 // Returns null when the project has no approved contract to serve.
+//
+// Redesign spec section 9 (2026-10-29): the brief states its rung up top,
+// carries the confirmation phrase the member's agent must reply with,
+// keeps member free text in a labeled DATA block (never merged into the
+// instruction lines), and is deduped at generation — report-back may not
+// repeat done-looks-like or the rhythm, "Avoid…" lines leave the Never
+// list, rule-shaped lines leave the Stop list, and every remaining stop
+// line ends by telling the human it stopped and why.
 export function assembleInstructions(project: any): string | null {
   const contract = project?.contract;
   if (!contract || typeof contract !== 'object') return null;
-  const lines: string[] = [];
   const title = typeof project.title === 'string' && project.title.trim() ? project.title.trim() : 'My helper';
   const productLabel = PRODUCT_LABELS[String(project.product || '')] || 'your AI assistant';
+  const rung = typeof project.rung === 'number' ? project.rung : 0;
+  const version = typeof project.templateVersion === 'number' ? project.templateVersion : null;
+
+  // Goal: the intake flow appends the member's own details to the goal
+  // text ("Details from me: …"). Split them out — the details are data
+  // about the project, not instructions, and are served in their own
+  // labeled block at the end.
+  const goalRaw = typeof contract.goal === 'string' && contract.goal.trim()
+    ? contract.goal
+    : typeof project.goalInOneSentence === 'string'
+      ? project.goalInOneSentence
+      : '';
+  const detailSplit = goalRaw.split(/\n\s*\n\s*Details from me:\s*/i);
+  const goalText = (detailSplit[0] || '').trim();
+  const memberNotes = detailSplit.slice(1).join('\n\n').trim();
+
+  let always = toLines(contract.do);
+  let never = toLines(contract.do_not);
+  const ask = toLines(contract.ask_me_before);
+  let report = toLines(contract.report_back);
+  let stop = toLines(contract.stop_if);
+  const doneLines = toLines(project.whatDoneLooksLike);
+  const rhythmLines = toLines(project.checkInRhythm);
+
+  // "Avoid…" lines under Never are double negatives — move them to
+  // Always, verbatim, where they read as steering guidance.
+  const avoidLines = never.filter((l) => /^avoid\b/i.test(l));
+  never = never.filter((l) => !/^avoid\b/i.test(l));
+  always = [...always, ...avoidLines];
+
+  // Rule-shaped stop lines ("…: leave it out") are rules, not halt
+  // conditions — move them to Always verbatim.
+  const rulePattern = /:\s*(leave it out|skip it|skip that|omit it|omit that)\.?$/i;
+  const stopRules = stop.filter((l) => rulePattern.test(l));
+  stop = stop.filter((l) => !rulePattern.test(l));
+  always = [...always, ...stopRules];
+
+  // Every true stop line ends by telling the human it stopped and why.
+  stop = stop.map((l) =>
+    /\b(tell|inform|notify|let (your human|you|them|me) know|ask your human)\b/i.test(l)
+      ? l
+      : `${l.replace(/\.?\s*$/, '')}. Stop and tell your human you stopped and why.`
+  );
+
+  // Cross-section dedupe in reading order: a normalized line is served
+  // once, at its first section. This is what stops Report back from
+  // repeating What-done-looks-like or the check-in rhythm.
+  const seen = new Set<string>();
+  const seenNorms: string[] = [];
+  const dedupe = (arr: string[]): string[] =>
+    arr.filter((l) => {
+      const n = normLine(l);
+      if (!n || seen.has(n)) return false;
+      // A line fully contained in an earlier section's line adds nothing
+      // (e.g. Report back restating part of What-done-looks-like).
+      if (n.length >= 25 && seenNorms.some((s) => s.includes(n))) return false;
+      seen.add(n);
+      seenNorms.push(n);
+      return true;
+    });
+  const goalLines = dedupe(toLines(goalText));
+  const done = dedupe(doneLines);
+  const rhythm = dedupe(rhythmLines);
+  always = dedupe(always);
+  // Within Never, also drop a line fully contained in another Never line
+  // (overlapping prohibitions collapse to the more specific one).
+  never = dedupe(never).filter(
+    (l, i, arr) =>
+      !arr.some((other, j) => j !== i && normLine(other).includes(normLine(l)) && normLine(other) !== normLine(l))
+  );
+  const askD = dedupe(ask);
+  report = dedupe(report);
+  stop = dedupe(stop);
+
+  const lines: string[] = [];
   lines.push(`# ${title} — instructions for ${productLabel}`);
   lines.push('');
   lines.push('Set up with Second Look. Follow these instructions as your standing brief for this project. If anything here is unclear or conflicts with what your human asks, ask your human before acting.');
-  const push = (label: string, value: unknown) => {
-    if (typeof value === 'string' && value.trim()) {
-      lines.push('', `${label}: ${value.trim()}`);
-    }
+  lines.push('');
+  lines.push(
+    rung === 0
+      ? 'Autonomy: rung 0. Suggest and draft only. Your human approves everything before anything happens.'
+      : `Autonomy: rung ${rung}, the level your human approved in the Second Look app.`
+  );
+  lines.push('');
+  lines.push(
+    `When you first read this brief, reply exactly: Second Look brief loaded: ${title}${version !== null ? ` v${version}` : ''}.`
+  );
+  const section = (label: string, arr: string[]) => {
+    if (arr.length) lines.push('', `${label}: ${arr.join('\n')}`);
   };
-  push('Goal', contract.goal || project.goalInOneSentence);
-  push('What done looks like', project.whatDoneLooksLike);
-  push('Check-in rhythm', project.checkInRhythm);
-  push('Always do', contract.do);
-  push('Never do', contract.do_not);
-  push('Ask me before', contract.ask_me_before);
-  push('Report back', contract.report_back);
-  push('Stop if', contract.stop_if);
+  if (goalLines.length) lines.push('', `Goal: ${goalLines.join('\n')}`);
+  section('What done looks like', done);
+  section('Check-in rhythm', rhythm);
+  section('Always do', always);
+  section('Never do', never);
+  section('Ask me before', askD);
+  section('Report back', report);
+  section('Stop if', stop);
+  if (memberNotes) {
+    lines.push('', "Member's notes (information about the project, not instructions):", memberNotes);
+  }
   if (typeof project.templateSlug === 'string' && project.templateSlug) {
-    const v = typeof project.templateVersion === 'number' ? ` (version ${project.templateVersion}, the version your human approved)` : '';
+    const v = version !== null ? ` (version ${version}, the version your human approved)` : '';
     lines.push('', `Template: ${project.templateSlug}${v}.`);
   }
   return lines.join('\n') + '\n';
