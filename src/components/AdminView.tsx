@@ -93,6 +93,46 @@ export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
   const [isForbidden, setIsForbidden] = useState<boolean>(false);
   const [adminData, setAdminData] = useState<AdminData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [importBusy, setImportBusy] = useState<boolean>(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [importText, setImportText] = useState<string>('');
+
+  const runTemplateImport = async (records: any[]) => {
+    setImportBusy(true);
+    setImportMsg(null);
+    try {
+      const res = await authFetch('/api/admin/templates/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templates: records }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Import failed.');
+      const skippedNote =
+        Array.isArray(data.skipped) && data.skipped.length > 0
+          ? ` Skipped: ${data.skipped.map((s: any) => `${s.slug || '?'} (${s.reason})`).join(', ')}.`
+          : '';
+      setImportMsg(`Imported ${data.count}: ${(data.imported || []).join(', ')}.${skippedNote}`);
+    } catch (e: any) {
+      setImportMsg(e?.message || 'Import failed.');
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const importBundledRecords = async () => {
+    const mod = await import('../data/templateRecords.js');
+    await runTemplateImport(mod.TEMPLATE_RECORDS || []);
+  };
+
+  const importPastedRecords = async () => {
+    try {
+      const parsed = JSON.parse(importText);
+      await runTemplateImport(Array.isArray(parsed) ? parsed : [parsed]);
+    } catch {
+      setImportMsg('That is not valid JSON — paste one template record or an array of records.');
+    }
+  };
 
   const fetchAdminData = async () => {
     setLoading(true);
@@ -476,6 +516,45 @@ export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Template records import (Track 3, Step 0) */}
+        <div className="bg-white border border-[#E6DFD3] rounded-xl p-5 shadow-xs">
+          <h2 className="text-base font-semibold text-[#1C1917]">Template records (Firestore)</h2>
+          <p className="text-xs text-[#78716C] mt-1 mb-3">
+            Firestore templates are server-write only, so finished records (authored in Basic
+            Memory) land here. Importing writes each record as templates/&#123;slug&#125; — the
+            record, including its version, becomes the doc. The app uses its bundled copies only
+            when Firestore has no doc for a slug.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={importBundledRecords}
+              disabled={importBusy}
+              className="px-3.5 py-2 bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium rounded-lg disabled:opacity-50 transition-colors"
+            >
+              {importBusy ? 'Importing…' : 'Import the 4 finished records'}
+            </button>
+            <span className="text-xs text-[#78716C]">
+              trip-planner v2 (fills the empty v1 layers) · insurance-bill-appeal ·
+              family-scheduler · daily-news-podcast
+            </span>
+          </div>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            placeholder="…or paste a template record (JSON object or array) to import it"
+            rows={4}
+            className="w-full mt-3 px-3 py-2 rounded-lg border border-[#E6DFD3] text-xs font-mono bg-[#FBF9F5]"
+          />
+          <button
+            onClick={importPastedRecords}
+            disabled={importBusy || !importText.trim()}
+            className="mt-2 px-3.5 py-2 bg-[#F4F0E8] hover:bg-[#EAE4D7] border border-[#E6DFD3] text-[#1C1917] text-xs font-medium rounded-lg disabled:opacity-50 transition-colors"
+          >
+            Import pasted JSON
+          </button>
+          {importMsg && <p className="text-xs text-[#57534E] mt-3">{importMsg}</p>}
         </div>
 
         {/* Google Sheet Tabs: Handoffs, Corrections, Tools */}

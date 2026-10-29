@@ -66,6 +66,7 @@ import { KnowledgeModal } from './components/KnowledgeModal.js';
 import { ToolsProfileModal, ToolsCatalogData } from './components/ToolsProfileModal.js';
 import { AdminView } from './components/AdminView.js';
 import { PlanView } from './components/PlanView.js';
+import { OnboardingView } from './components/OnboardingView.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
   Mic,
@@ -125,6 +126,8 @@ export default function App() {
   // Navigation / View State
   const [isAdminView, setIsAdminView] = useState<boolean>(false);
   const [isPlanView, setIsPlanView] = useState<boolean>(false);
+  const [isSetupView, setIsSetupView] = useState<boolean>(false);
+  const [setupProjectId, setSetupProjectId] = useState<string | null>(null);
   const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
   // User & Consent State
@@ -1683,10 +1686,37 @@ export default function App() {
     );
   }
 
+  // If viewing Start setup (Track 3: General Onboarding + Project Intake)
+  if (isSetupView && user) {
+    return (
+      <OnboardingView
+        user={user}
+        projects={userProjectsMap}
+        bookingUrl={bookingUrl}
+        initialProjectId={setupProjectId}
+        onClose={() => {
+          setIsSetupView(false);
+          setSetupProjectId(null);
+          window.history.pushState({}, '', '/');
+        }}
+        onProjectsChanged={(map) => {
+          setUserProjectsMap(map);
+          userProjectsMapRef.current = map;
+        }}
+      />
+    );
+  }
+
   // If viewing My plan (user is signed in)
   if (isPlanView) {
     return (
       <PlanView
+        onOpenSetup={() => {
+          setIsPlanView(false);
+          setSetupProjectId(null);
+          setIsSetupView(true);
+          window.history.pushState({}, '', '/setup');
+        }}
         onClose={() => {
           setIsPlanView(false);
           window.history.pushState({}, '', '/');
@@ -2328,6 +2358,24 @@ export default function App() {
               );
             })()}
 
+            {/* Start setup entry (Track 3): always available when signed in */}
+            {user && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSetupProjectId(null);
+                  setIsSetupView(true);
+                  window.history.pushState({}, '', '/setup');
+                }}
+                className="w-full p-3.5 bg-[#405D1A] hover:bg-[#365013] text-white rounded-xl text-left shadow-2xs transition-colors"
+              >
+                <span className="block text-sm font-semibold">Start setup</span>
+                <span className="block text-[11px] text-white/80 leading-snug mt-0.5">
+                  Set up a project with the guide — about five minutes, one step at a time.
+                </span>
+              </button>
+            )}
+
             {/* My projects section at the top of the sidebar (only if the user has projects) */}
             {Object.keys(userProjectsMap).length > 0 && (
               <div className="space-y-2.5">
@@ -2480,6 +2528,20 @@ export default function App() {
                               Rung {proj.rung}
                             </span>
                           </div>
+
+                          {proj.status === 'needs_setup' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSetupProjectId(proj.projectId);
+                                setIsSetupView(true);
+                                window.history.pushState({}, '', '/setup');
+                              }}
+                              className="w-full px-3 py-2 rounded-lg bg-[#405D1A] hover:bg-[#365013] text-white text-[11px] font-semibold transition-colors"
+                            >
+                              Start setup →
+                            </button>
+                          )}
 
                           {proj.contract?.goal && (
                             <p className="text-[11px] text-[#57534E] line-clamp-2 leading-relaxed pt-1 border-t border-[#F4F0E8]">

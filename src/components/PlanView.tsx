@@ -1,6 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { X, Clock, Calendar, Sparkles } from 'lucide-react';
-import { auth, authFetch, createNeedsSetupProject } from '../lib/firebase.js';
+import { X, Clock, Calendar, Sparkles, ArrowRight } from 'lucide-react';
+import {
+  auth,
+  authFetch,
+  createNeedsSetupProject,
+  saveMemberOnboarding,
+  type SetupLane,
+} from '../lib/firebase.js';
+import { getTemplateWithFallback } from '../lib/templates.js';
 
 const REDEEM_URL = 'https://ixfacparwrbkzxhbsuad.supabase.co/functions/v1/redeem-code';
 
@@ -52,12 +59,14 @@ export const PlanView: React.FC<{
   onClose: () => void;
   onOpenTools: () => void;
   onOpenNotes: () => void;
-}> = ({ onClose, onOpenTools, onOpenNotes }) => {
+  onOpenSetup?: () => void;
+}> = ({ onClose, onOpenTools, onOpenNotes, onOpenSetup }) => {
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [redeemCode, setRedeemCode] = useState('');
   const [redeeming, setRedeeming] = useState(false);
   const [redeemMessage, setRedeemMessage] = useState<string | null>(null);
+  const [redeemOk, setRedeemOk] = useState(false);
 
   const handleRedeem = async () => {
     const code = redeemCode.trim().toUpperCase();
@@ -66,6 +75,7 @@ export const PlanView: React.FC<{
     if (!user) { setRedeemMessage('Sign in first, then redeem your code.'); return; }
     setRedeeming(true);
     setRedeemMessage(null);
+    setRedeemOk(false);
     try {
       const token = await user.getIdToken();
       const res = await fetch(REDEEM_URL, {
@@ -80,10 +90,45 @@ export const PlanView: React.FC<{
           : 'That code is not valid for an active plan.');
         return;
       }
-      if (!data.template_slug) { setRedeemMessage('Code accepted, but no template was picked with this purchase.'); return; }
-      const projectId = await createNeedsSetupProject(user.uid, data.template_slug);
+      // Track 3: the purchase's lane + gift context ride into onboarding and
+      // the project. redeem-code returns package/is_gift/gift_recipient_name
+      // once its update deploys; until then these default calmly (membership
+      // lane, not a gift) and nothing breaks.
+      const lane: SetupLane =
+        data.package === 'virtual' ? 'virtual' : data.package ? 'lunch' : 'membership';
+      const isGift = Boolean(data.is_gift);
+      const giftRecipientName =
+        typeof data.gift_recipient_name === 'string' ? data.gift_recipient_name : undefined;
+      await saveMemberOnboarding(user.uid, {
+        lane,
+        isGift,
+        giftRecipientName,
+        packageKind: typeof data.package === 'string' ? data.package : undefined,
+        startedAs: isGift
+          ? 'gift-arrival'
+          : data.template_slug
+            ? 'template-in-hand'
+            : 'open-start',
+      });
+      setRedeemOk(true);
+      if (!data.template_slug) {
+        setRedeemMessage(
+          lane !== 'membership'
+            ? 'Code accepted — your setup package is active. Open Start setup to book your session with Nic and pick a first project whenever you’re ready.'
+            : 'Code accepted — your plan is active. Open Start setup to pick your first project whenever you’re ready.',
+        );
+        return;
+      }
+      const template = await getTemplateWithFallback(data.template_slug);
+      const projectId = await createNeedsSetupProject(user.uid, data.template_slug, 'redemption', {
+        startedAs: isGift ? 'gift-arrival' : 'template-in-hand',
+        lane,
+        isGift,
+        giftRecipientName,
+        templateOverride: template || undefined,
+      });
       setRedeemMessage(projectId
-        ? `Template ready: ${data.template_slug}. Open it from your projects to start setup.`
+        ? `Template ready: ${data.template_slug}. Start setup will walk you through it — about five minutes.`
         : 'Code accepted, but the template could not be found. Contact Nic.');
     } catch {
       setRedeemMessage('Redemption is not available right now. Try again in a moment.');
@@ -268,6 +313,14 @@ export const PlanView: React.FC<{
             </button>
           </div>
           {redeemMessage && <p className="text-sm text-[#57534E] mt-3">{redeemMessage}</p>}
+          {redeemOk && onOpenSetup && (
+            <button
+              onClick={onOpenSetup}
+              className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#405D1A] text-white text-sm"
+            >
+              Start setup <ArrowRight className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         <div className="bg-white border border-[#E6DFD3] rounded-xl p-6">

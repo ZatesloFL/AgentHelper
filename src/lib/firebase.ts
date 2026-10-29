@@ -152,6 +152,25 @@ export interface ProjectRungHistoryItem {
   at: string;
 }
 
+export type ProjectStartedAs =
+  | 'template-in-hand'
+  | 'open-start'
+  | 'brainstorm-first'
+  | 'gift-arrival'
+  | 'blank';
+
+export type SetupLane = 'membership' | 'virtual' | 'lunch';
+
+/** Track 3 intake progress: slots filled so far + where the member stopped.
+ * Saved as progress only — never as a contract before guardrail confirmation. */
+export interface ProjectIntakeState {
+  step: string;
+  slots: Record<string, string>;
+  agentChoice?: string;
+  completed?: boolean;
+  updatedAt: string;
+}
+
 export interface UserProjectDoc {
   projectId: string;
   title?: string;
@@ -159,6 +178,15 @@ export interface UserProjectDoc {
   contract: TaskContractFields;
   rung: 0 | 1 | 2 | 3;
   status: 'active' | 'paused' | 'needs_setup';
+  // Track 3 (four paths / three lanes): how this project started, what the
+  // member bought (lane), gift + brainstorm context, and intake progress.
+  startedAs?: ProjectStartedAs;
+  lane?: SetupLane;
+  isGift?: boolean;
+  giftRecipientName?: string;
+  brainstormNotes?: string;
+  sessionFirst?: boolean;
+  intake?: ProjectIntakeState;
   // Track 2: a project created from a purchased template, before the
   // Calm Guide intake (Track 3) turns it into a rung-0 contract. The
   // template doc is copied in, not linked, so the member's project keeps
@@ -1291,6 +1319,46 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
   if (typeof d?.source === 'string' && d.source.trim()) {
     docObj.source = d.source.trim().slice(0, 100);
   }
+  if (
+    d?.startedAs === 'template-in-hand' ||
+    d?.startedAs === 'open-start' ||
+    d?.startedAs === 'brainstorm-first' ||
+    d?.startedAs === 'gift-arrival' ||
+    d?.startedAs === 'blank'
+  ) {
+    docObj.startedAs = d.startedAs;
+  }
+  if (d?.lane === 'membership' || d?.lane === 'virtual' || d?.lane === 'lunch') {
+    docObj.lane = d.lane;
+  }
+  if (typeof d?.isGift === 'boolean') {
+    docObj.isGift = d.isGift;
+  }
+  if (typeof d?.giftRecipientName === 'string' && d.giftRecipientName.trim()) {
+    docObj.giftRecipientName = d.giftRecipientName.trim().slice(0, 200);
+  }
+  if (typeof d?.brainstormNotes === 'string' && d.brainstormNotes.trim()) {
+    docObj.brainstormNotes = d.brainstormNotes.trim().slice(0, 8000);
+  }
+  if (typeof d?.sessionFirst === 'boolean') {
+    docObj.sessionFirst = d.sessionFirst;
+  }
+  if (d?.intake && typeof d.intake === 'object') {
+    const rawSlots =
+      d.intake.slots && typeof d.intake.slots === 'object' ? d.intake.slots : {};
+    const slots: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawSlots)) {
+      if (typeof v === 'string') slots[k] = v.slice(0, 4000);
+    }
+    docObj.intake = {
+      step: typeof d.intake.step === 'string' ? d.intake.step.slice(0, 60) : 'opening',
+      slots,
+      agentChoice:
+        typeof d.intake.agentChoice === 'string' ? d.intake.agentChoice.slice(0, 60) : undefined,
+      completed: d.intake.completed === true,
+      updatedAt: toIsoString(d.intake.updatedAt || updatedAt),
+    };
+  }
   return docObj;
 }
 
@@ -1328,6 +1396,43 @@ export async function getUserProjects(uid: string): Promise<Record<string, UserP
   return map;
 }
 
+/** One claim inside a platform layer, tagged by how well it is sourced. */
+export interface TemplateLayerClaim {
+  text: string;
+  tag?: string;
+  sources?: string[];
+}
+
+/** Per-agent setup layer (Track 3). Claude's template records carry these as
+ * structured objects; the original trip-planner v1 seed used empty strings,
+ * so readers must tolerate both shapes. */
+export interface TemplateLayer {
+  assistant?: string;
+  setupFeature?: string;
+  setupPath?: string;
+  minimumPlan?: string;
+  setupClaims?: TemplateLayerClaim[];
+  fallback?: string;
+  pasteText?: string;
+  memberSteps?: string[];
+  willDo?: Array<TemplateLayerClaim | string>;
+  wontDo?: Array<TemplateLayerClaim | string>;
+  memberDoesByHand?: string[];
+  basis?: string;
+  lastVerified?: string;
+}
+
+/** The template's draft contract: goal is a string, the guardrail fields are
+ * line arrays in the records (joined with newlines when edited as text). */
+export interface TemplateContractDraft {
+  goal?: string;
+  do?: string | string[];
+  do_not?: string | string[];
+  ask_me_before?: string | string[];
+  report_back?: string | string[];
+  stop_if?: string | string[];
+}
+
 export interface TemplateDoc {
   slug: string;
   title: string;
@@ -1338,7 +1443,36 @@ export interface TemplateDoc {
   experienceLevel?: string;
   whatDoneLooksLike?: string;
   checkInRhythm?: string;
-  platformLayers?: Record<string, string>;
+  steps?: string[];
+  contract?: TemplateContractDraft;
+  platformLayers?: Record<string, TemplateLayer | string>;
+  knownIssues?: Record<string, TemplateLayerClaim[]>;
+  lastVerified?: string;
+}
+
+/** Map raw Firestore/record data onto a TemplateDoc (shared by the Firestore
+ * reader and the bundled-record fallback in lib/templates). */
+export function templateDocFromData(slug: string, d: any): TemplateDoc {
+  const clean = String(slug || '').trim();
+  const strList = (v: any): string[] | undefined =>
+    Array.isArray(v) ? v.filter((x: any) => typeof x === 'string') : undefined;
+  return {
+    slug: clean,
+    title: typeof d?.title === 'string' && d.title.trim() ? d.title : clean,
+    audience: typeof d?.audience === 'string' ? d.audience : undefined,
+    category: typeof d?.category === 'string' ? d.category : undefined,
+    version: typeof d?.version === 'number' ? d.version : 1,
+    goalInOneSentence: typeof d?.goalInOneSentence === 'string' ? d.goalInOneSentence : undefined,
+    experienceLevel: typeof d?.experienceLevel === 'string' ? d.experienceLevel : undefined,
+    whatDoneLooksLike: typeof d?.whatDoneLooksLike === 'string' ? d.whatDoneLooksLike : undefined,
+    checkInRhythm: typeof d?.checkInRhythm === 'string' ? d.checkInRhythm : undefined,
+    steps: strList(d?.steps),
+    contract: d?.contract && typeof d.contract === 'object' ? d.contract : undefined,
+    platformLayers:
+      d?.platformLayers && typeof d.platformLayers === 'object' ? d.platformLayers : undefined,
+    knownIssues: d?.knownIssues && typeof d.knownIssues === 'object' ? d.knownIssues : undefined,
+    lastVerified: typeof d?.lastVerified === 'string' ? d.lastVerified : undefined,
+  };
 }
 
 /** Read a shared template from Firestore templates/{slug} (signed-in read). */
@@ -1348,22 +1482,23 @@ export async function getTemplate(slug: string): Promise<TemplateDoc | null> {
   try {
     const snap = await getDoc(doc(db, 'templates', clean));
     if (!snap.exists()) return null;
-    const d = snap.data() as any;
-    return {
-      slug: clean,
-      title: typeof d?.title === 'string' && d.title.trim() ? d.title : clean,
-      audience: typeof d?.audience === 'string' ? d.audience : undefined,
-      category: typeof d?.category === 'string' ? d.category : undefined,
-      version: typeof d?.version === 'number' ? d.version : 1,
-      goalInOneSentence: typeof d?.goalInOneSentence === 'string' ? d.goalInOneSentence : undefined,
-      experienceLevel: typeof d?.experienceLevel === 'string' ? d.experienceLevel : undefined,
-      whatDoneLooksLike: typeof d?.whatDoneLooksLike === 'string' ? d.whatDoneLooksLike : undefined,
-      checkInRhythm: typeof d?.checkInRhythm === 'string' ? d.checkInRhythm : undefined,
-      platformLayers: d?.platformLayers && typeof d.platformLayers === 'object' ? d.platformLayers : undefined,
-    };
+    return templateDocFromData(clean, snap.data());
   } catch (err) {
     console.warn('Error reading template from Firestore:', err);
     return null;
+  }
+}
+
+/** List every shared template in Firestore (signed-in read). */
+export async function listTemplates(): Promise<TemplateDoc[]> {
+  try {
+    const snap = await getDocs(collection(db, 'templates'));
+    const out: TemplateDoc[] = [];
+    snap.forEach((docSnap) => out.push(templateDocFromData(docSnap.id, docSnap.data())));
+    return out;
+  } catch (err) {
+    console.warn('Error listing templates from Firestore:', err);
+    return [];
   }
 }
 
@@ -1376,17 +1511,38 @@ export async function getTemplate(slug: string): Promise<TemplateDoc | null> {
  * at rung 0; the member's agent is not chosen yet, so product stays unset.
  * Returns the project id, or null when the template does not exist.
  */
+export interface NeedsSetupOptions {
+  startedAs?: ProjectStartedAs;
+  lane?: SetupLane;
+  isGift?: boolean;
+  giftRecipientName?: string;
+  brainstormNotes?: string;
+  /** Pre-loaded template (e.g. from the bundled-record fallback) — used
+   * instead of a Firestore read when Firestore has no doc for the slug. */
+  templateOverride?: TemplateDoc;
+}
+
 export async function createNeedsSetupProject(
   uid: string,
   templateSlug: string,
   source = 'redemption',
+  opts: NeedsSetupOptions = {},
 ): Promise<string | null> {
   if (!uid || !templateSlug) return null;
-  const template = await getTemplate(templateSlug);
+  const template = opts.templateOverride || (await getTemplate(templateSlug));
   if (!template) return null;
   const projectId = template.slug;
   const ref = doc(db, 'users', uid, 'projects', projectId);
   const nowIso = new Date().toISOString();
+  const meta: Record<string, any> = {};
+  if (opts.startedAs) meta.startedAs = opts.startedAs;
+  if (opts.lane) {
+    meta.lane = opts.lane;
+    if (opts.lane === 'virtual' || opts.lane === 'lunch') meta.sessionFirst = true;
+  }
+  if (typeof opts.isGift === 'boolean') meta.isGift = opts.isGift;
+  if (opts.giftRecipientName) meta.giftRecipientName = opts.giftRecipientName;
+  if (opts.brainstormNotes) meta.brainstormNotes = opts.brainstormNotes;
   try {
     const existing = await getDoc(ref);
     if (existing.exists()) {
@@ -1402,6 +1558,7 @@ export async function createNeedsSetupProject(
         whatDoneLooksLike: template.whatDoneLooksLike || null,
         checkInRhythm: template.checkInRhythm || null,
         source,
+        ...meta,
         updatedAt: nowIso,
       }, { merge: true });
       return projectId;
@@ -1418,6 +1575,7 @@ export async function createNeedsSetupProject(
       whatDoneLooksLike: template.whatDoneLooksLike || null,
       checkInRhythm: template.checkInRhythm || null,
       source,
+      ...meta,
       history: [{ rung: 0, at: nowIso }],
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -1437,7 +1595,7 @@ export async function saveUserProjectContract(
     product?: string;
     contract: TaskContractFields;
     rung: number;
-    status?: 'active' | 'paused';
+    status?: 'active' | 'paused' | 'needs_setup';
   }
 ): Promise<UserProjectDoc> {
   const cleanId = String(projectId || '').trim() || 'first-task';
@@ -1487,6 +1645,23 @@ export async function saveUserProjectContract(
     history: prevHistory,
     createdAt,
     updatedAt: nowIso,
+    // Track 2/3 metadata survives a contract save (template link, path,
+    // lane, gift/brainstorm context, intake state) — dropping it here
+    // would detach the project from its template after intake.
+    templateSlug: existing?.templateSlug,
+    templateVersion: existing?.templateVersion,
+    goalInOneSentence: existing?.goalInOneSentence,
+    experienceLevel: existing?.experienceLevel,
+    whatDoneLooksLike: existing?.whatDoneLooksLike,
+    checkInRhythm: existing?.checkInRhythm,
+    source: existing?.source,
+    startedAs: existing?.startedAs,
+    lane: existing?.lane,
+    isGift: existing?.isGift,
+    giftRecipientName: existing?.giftRecipientName,
+    brainstormNotes: existing?.brainstormNotes,
+    sessionFirst: existing?.sessionFirst,
+    intake: existing?.intake,
   };
 
   if (uid) {
@@ -1507,6 +1682,22 @@ export async function saveUserProjectContract(
     };
     if (docObj.title) firestorePayload.title = docObj.title;
     if (docObj.product) firestorePayload.product = docObj.product;
+    if (docObj.templateSlug) firestorePayload.templateSlug = docObj.templateSlug;
+    if (typeof docObj.templateVersion === 'number')
+      firestorePayload.templateVersion = docObj.templateVersion;
+    if (docObj.goalInOneSentence) firestorePayload.goalInOneSentence = docObj.goalInOneSentence;
+    if (docObj.experienceLevel) firestorePayload.experienceLevel = docObj.experienceLevel;
+    if (docObj.whatDoneLooksLike) firestorePayload.whatDoneLooksLike = docObj.whatDoneLooksLike;
+    if (docObj.checkInRhythm) firestorePayload.checkInRhythm = docObj.checkInRhythm;
+    if (docObj.source) firestorePayload.source = docObj.source;
+    if (docObj.startedAs) firestorePayload.startedAs = docObj.startedAs;
+    if (docObj.lane) firestorePayload.lane = docObj.lane;
+    if (typeof docObj.isGift === 'boolean') firestorePayload.isGift = docObj.isGift;
+    if (docObj.giftRecipientName) firestorePayload.giftRecipientName = docObj.giftRecipientName;
+    if (docObj.brainstormNotes) firestorePayload.brainstormNotes = docObj.brainstormNotes;
+    if (typeof docObj.sessionFirst === 'boolean')
+      firestorePayload.sessionFirst = docObj.sessionFirst;
+    if (docObj.intake) firestorePayload.intake = docObj.intake;
 
     try {
       await setDoc(doc(db, 'users', uid, 'projects', cleanId), firestorePayload, { merge: true });
@@ -1561,6 +1752,151 @@ export async function updateUserProjectStatus(
   }
 
   return updatedDoc;
+}
+
+/** Track 3: merge arbitrary fields into a project doc (intake progress,
+ * path/lane metadata) without touching its contract. Keeps the localStorage
+ * cache and Firestore in step, like the other project helpers. */
+export async function updateUserProjectFields(
+  uid: string,
+  projectId: string,
+  fields: Record<string, any>,
+): Promise<UserProjectDoc | null> {
+  if (!uid || !projectId) return null;
+  const nowIso = new Date().toISOString();
+  const payload = { ...fields, updatedAt: nowIso };
+  let updatedDoc: UserProjectDoc | null = null;
+  try {
+    const raw = localStorage.getItem(`projects_${uid}`);
+    const all = raw ? JSON.parse(raw) : {};
+    if (all[projectId]) {
+      all[projectId] = { ...all[projectId], ...payload };
+      updatedDoc = sanitizeProjectDoc(projectId, all[projectId]);
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(all));
+    }
+  } catch (_) {}
+  try {
+    await setDoc(doc(db, 'users', uid, 'projects', projectId), payload, { merge: true });
+    const snap = await getDoc(doc(db, 'users', uid, 'projects', projectId));
+    if (snap.exists()) updatedDoc = sanitizeProjectDoc(projectId, snap.data());
+  } catch (err) {
+    console.warn(`Error updating project fields for ${projectId}:`, err);
+  }
+  return updatedDoc;
+}
+
+/** Track 3: a blank (design-your-own) project shell in needs_setup, filled
+ * by the same intake engine as template projects. */
+export async function createBlankProject(
+  uid: string,
+  opts: {
+    startedAs?: ProjectStartedAs;
+    lane?: SetupLane;
+    isGift?: boolean;
+    giftRecipientName?: string;
+  } = {},
+): Promise<string | null> {
+  if (!uid) return null;
+  const projectId = `blank-${Date.now().toString(36)}`;
+  const nowIso = new Date().toISOString();
+  const payload: Record<string, any> = {
+    contract: { goal: '', do: '', do_not: '', ask_me_before: '', report_back: '', stop_if: '' },
+    rung: 0,
+    status: 'needs_setup',
+    title: 'My own project',
+    source: 'in-app-blank',
+    startedAs: opts.startedAs || 'blank',
+    history: [{ rung: 0, at: nowIso }],
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  if (opts.lane) {
+    payload.lane = opts.lane;
+    if (opts.lane === 'virtual' || opts.lane === 'lunch') payload.sessionFirst = true;
+  }
+  if (typeof opts.isGift === 'boolean') payload.isGift = opts.isGift;
+  if (opts.giftRecipientName) payload.giftRecipientName = opts.giftRecipientName;
+  try {
+    await setDoc(doc(db, 'users', uid, 'projects', projectId), payload);
+    try {
+      const raw = localStorage.getItem(`projects_${uid}`);
+      const all = raw ? JSON.parse(raw) : {};
+      all[projectId] = payload;
+      localStorage.setItem(`projects_${uid}`, JSON.stringify(all));
+    } catch (_) {}
+    return projectId;
+  } catch (err) {
+    console.warn('Error creating blank project:', err);
+    return null;
+  }
+}
+
+/** Track 3: the member-level General Onboarding record (once per member),
+ * at users/{uid}/onboarding/current. Client-writable under firestore.rules
+ * (only membership + nic_time_ledger are server-only). */
+export interface MemberOnboardingDoc {
+  completed: boolean;
+  assistantProduct?: string;
+  comfortLevel?: string;
+  goalsText?: string;
+  lane?: SetupLane;
+  startedAs?: ProjectStartedAs;
+  isGift?: boolean;
+  giftRecipientName?: string;
+  packageKind?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getMemberOnboarding(uid: string): Promise<MemberOnboardingDoc | null> {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid, 'onboarding', 'current'));
+    if (!snap.exists()) return null;
+    const d = snap.data() as any;
+    return {
+      completed: d?.completed === true,
+      assistantProduct: typeof d?.assistantProduct === 'string' ? d.assistantProduct : undefined,
+      comfortLevel: typeof d?.comfortLevel === 'string' ? d.comfortLevel : undefined,
+      goalsText: typeof d?.goalsText === 'string' ? d.goalsText : undefined,
+      lane:
+        d?.lane === 'virtual' || d?.lane === 'lunch' || d?.lane === 'membership'
+          ? d.lane
+          : undefined,
+      startedAs: typeof d?.startedAs === 'string' ? d.startedAs : undefined,
+      isGift: typeof d?.isGift === 'boolean' ? d.isGift : undefined,
+      giftRecipientName:
+        typeof d?.giftRecipientName === 'string' ? d.giftRecipientName : undefined,
+      packageKind: typeof d?.packageKind === 'string' ? d.packageKind : undefined,
+      createdAt: toIsoString(d?.createdAt || d?.updatedAt || new Date().toISOString()),
+      updatedAt: toIsoString(d?.updatedAt || new Date().toISOString()),
+    };
+  } catch (err) {
+    console.warn('Error reading member onboarding:', err);
+    return null;
+  }
+}
+
+export async function saveMemberOnboarding(
+  uid: string,
+  partial: Partial<MemberOnboardingDoc>,
+): Promise<MemberOnboardingDoc | null> {
+  if (!uid) return null;
+  const nowIso = new Date().toISOString();
+  const payload: Record<string, any> = { updatedAt: nowIso };
+  for (const [k, v] of Object.entries(partial)) {
+    if (v !== undefined && k !== 'createdAt' && k !== 'updatedAt') payload[k] = v;
+  }
+  try {
+    const ref = doc(db, 'users', uid, 'onboarding', 'current');
+    const existing = await getDoc(ref);
+    if (!existing.exists()) payload.createdAt = nowIso;
+    await setDoc(ref, payload, { merge: true });
+    return await getMemberOnboarding(uid);
+  } catch (err) {
+    console.warn('Error saving member onboarding:', err);
+    return null;
+  }
 }
 
 export async function deleteUserProject(uid: string, projectId: string): Promise<void> {

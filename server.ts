@@ -43,6 +43,7 @@ import {
   handleNicTimeSync,
   handleAdminAdjust,
 } from './server/membership.js';
+import { handleImportTemplates } from './server/templates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -415,6 +416,10 @@ async function startServer() {
 
   // Admin Dashboard Data (requires Google sign-in + email in ADMIN_EMAILS)
   app.use('/api/admin', requireAdmin);
+
+  // Track 3, Step 0: template record import (Firestore templates are
+  // server-write only by rule).
+  app.post('/api/admin/templates/import', handleImportTemplates);
 
   app.get('/api/admin/data', async (_req, res) => {
     // Refresh health status
