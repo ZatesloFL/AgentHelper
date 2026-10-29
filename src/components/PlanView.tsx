@@ -4,12 +4,16 @@ import {
   auth,
   authFetch,
   createNeedsSetupProject,
+  getUserProjects,
   saveMemberOnboarding,
+  updateUserProjectFields,
   type SetupLane,
 } from '../lib/firebase.js';
 import { getTemplateWithFallback } from '../lib/templates.js';
 
 const REDEEM_URL = 'https://ixfacparwrbkzxhbsuad.supabase.co/functions/v1/redeem-code';
+const BRAINSTORM_GET_URL =
+  'https://ixfacparwrbkzxhbsuad.supabase.co/functions/v1/brainstorm-get';
 
 interface PlanBooking {
   id: string;
@@ -63,10 +67,16 @@ export const PlanView: React.FC<{
 }> = ({ onClose, onOpenTools, onOpenNotes, onOpenSetup }) => {
   const [plan, setPlan] = useState<PlanData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [redeemCode, setRedeemCode] = useState('');
+  const [redeemCode, setRedeemCode] = useState(
+    () => new URLSearchParams(window.location.search).get('code') || '',
+  );
   const [redeeming, setRedeeming] = useState(false);
   const [redeemMessage, setRedeemMessage] = useState<string | null>(null);
   const [redeemOk, setRedeemOk] = useState(false);
+  const [bsEmail, setBsEmail] = useState('');
+  const [bsCode, setBsCode] = useState('');
+  const [bsBusy, setBsBusy] = useState(false);
+  const [bsMessage, setBsMessage] = useState<string | null>(null);
 
   const handleRedeem = async () => {
     const code = redeemCode.trim().toUpperCase();
@@ -125,6 +135,10 @@ export const PlanView: React.FC<{
         lane,
         isGift,
         giftRecipientName,
+        brainstormNotes:
+          typeof data.brainstorm_notes === 'string' && data.brainstorm_notes.trim()
+            ? data.brainstorm_notes
+            : undefined,
         templateOverride: template || undefined,
       });
       setRedeemMessage(projectId
@@ -134,6 +148,50 @@ export const PlanView: React.FC<{
       setRedeemMessage('Redemption is not available right now. Try again in a moment.');
     } finally {
       setRedeeming(false);
+    }
+  };
+
+  const handleBrainstormAttach = async () => {
+    const user = auth.currentUser;
+    if (!user) { setBsMessage('Sign in first, then attach your brainstorm.'); return; }
+    const email = bsEmail.trim().toLowerCase();
+    const code = bsCode.trim().toUpperCase();
+    if (!email || !code) { setBsMessage('Enter the email and the resume code from your brainstorm.'); return; }
+    setBsBusy(true);
+    setBsMessage(null);
+    try {
+      const res = await fetch(BRAINSTORM_GET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, resumeCode: code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.found) {
+        setBsMessage('We could not find a brainstorm under that email and code — check both and try again.');
+        return;
+      }
+      const notes: string = data.brainstorm?.notes || '';
+      const slug: string = data.brainstorm?.template_slug || '';
+      const map = await getUserProjects(user.uid);
+      const candidates = Object.values(map).filter(
+        (p) => p.status === 'needs_setup' || p.status === 'ready',
+      );
+      const target =
+        candidates.find((p) => slug && p.templateSlug === slug) || candidates[0] || null;
+      if (!target) {
+        setBsMessage(
+          'Found your brainstorm — but redeem your plan code above first, so there is a project to attach it to. Then run this again.',
+        );
+        return;
+      }
+      await updateUserProjectFields(user.uid, target.projectId, { brainstormNotes: notes });
+      setBsMessage(
+        `Attached — your brainstorm notes are now on "${target.title || 'your project'}". Start setup and you'll see them first.`,
+      );
+    } catch {
+      setBsMessage('Attaching hiccuped — try again in a moment.');
+    } finally {
+      setBsBusy(false);
     }
   };
 
@@ -321,6 +379,33 @@ export const PlanView: React.FC<{
               Start setup <ArrowRight className="w-4 h-4" />
             </button>
           )}
+          <details className="mt-4">
+            <summary className="text-sm text-[#405D1A] cursor-pointer">
+              Brainstormed earlier with a different email?
+            </summary>
+            <p className="text-sm text-[#57534E] mt-2 mb-2">
+              If you brainstormed on the website under a different email than the one used at
+              checkout, attach those notes here with the resume code from your brainstorm page.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                value={bsEmail}
+                onChange={(e) => setBsEmail(e.target.value)}
+                placeholder="Brainstorm email"
+                className="px-3 py-2 rounded-lg border border-[#E6DFD3] text-sm flex-1 min-w-[180px]"
+              />
+              <input
+                value={bsCode}
+                onChange={(e) => setBsCode(e.target.value)}
+                placeholder="BS-XXXXXXXXXX"
+                className="px-3 py-2 rounded-lg border border-[#E6DFD3] text-sm flex-1 min-w-[140px]"
+              />
+              <button onClick={handleBrainstormAttach} disabled={bsBusy} className="px-4 py-2 rounded-lg border border-[#E6DFD3] text-sm disabled:opacity-50">
+                {bsBusy ? 'Attaching…' : 'Attach my brainstorm'}
+              </button>
+            </div>
+            {bsMessage && <p className="text-sm text-[#57534E] mt-2">{bsMessage}</p>}
+          </details>
         </div>
 
         <div className="bg-white border border-[#E6DFD3] rounded-xl p-6">
