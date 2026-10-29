@@ -44,6 +44,13 @@ import {
   handleAdminAdjust,
 } from './server/membership.js';
 import { handleImportTemplates } from './server/templates.js';
+import {
+  handleCreateInstructionLink,
+  handleGetInstructionLink,
+  handleRevokeInstructionLink,
+  handleGetInstructionsText,
+  handleServeInstructions,
+} from './server/instructions.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,6 +94,11 @@ async function startServer() {
     res.json(detailed);
   });
 
+  // Track 4: public instruction link. The unguessable token is the only
+  // credential; unknown/revoked tokens get a bare 404. Registered before
+  // requireUser and before the SPA fallback on purpose.
+  app.get('/i/:token', handleServeInstructions);
+
   // --- My Plan sync endpoints (SYNC_SECRET, not user auth) ---
   // These sit before requireUser so Supabase Edge Functions can forward
   // purchase/booking events without a Firebase ID token.
@@ -98,6 +110,13 @@ async function startServer() {
 
   // My Plan (signed-in user reads their own membership copy + Nic-time ledger)
   app.get('/api/membership', handleGetMembership);
+
+  // Track 4: per-project instruction links (owner-only management +
+  // copy-paste fallback text; the public fetch lives at /i/:token above)
+  app.get('/api/projects/:projectId/instruction-link', handleGetInstructionLink);
+  app.post('/api/projects/:projectId/instruction-link', handleCreateInstructionLink);
+  app.delete('/api/projects/:projectId/instruction-link', handleRevokeInstructionLink);
+  app.get('/api/projects/:projectId/instructions.txt', handleGetInstructionsText);
   app.post('/api/admin/membership/adjust', handleAdminAdjust);
 
   // Current signed-in user info & admin status

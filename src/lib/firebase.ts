@@ -193,6 +193,9 @@ export interface UserProjectDoc {
   // working even if the template is later versioned.
   templateSlug?: string;
   templateVersion?: number;
+  // Track 4 MVP: the template version whose update notice the member
+  // dismissed ("Not now"). The notice returns for any newer version.
+  dismissedTemplateVersion?: number;
   goalInOneSentence?: string;
   experienceLevel?: string;
   whatDoneLooksLike?: string;
@@ -1304,6 +1307,9 @@ function sanitizeProjectDoc(projectId: string, d: any): UserProjectDoc {
   if (typeof d?.templateVersion === 'number') {
     docObj.templateVersion = d.templateVersion;
   }
+  if (typeof d?.dismissedTemplateVersion === 'number') {
+    docObj.dismissedTemplateVersion = d.dismissedTemplateVersion;
+  }
   if (typeof d?.goalInOneSentence === 'string' && d.goalInOneSentence.trim()) {
     docObj.goalInOneSentence = d.goalInOneSentence.trim().slice(0, 500);
   }
@@ -1650,6 +1656,7 @@ export async function saveUserProjectContract(
     // would detach the project from its template after intake.
     templateSlug: existing?.templateSlug,
     templateVersion: existing?.templateVersion,
+    dismissedTemplateVersion: existing?.dismissedTemplateVersion,
     goalInOneSentence: existing?.goalInOneSentence,
     experienceLevel: existing?.experienceLevel,
     whatDoneLooksLike: existing?.whatDoneLooksLike,
@@ -1685,6 +1692,8 @@ export async function saveUserProjectContract(
     if (docObj.templateSlug) firestorePayload.templateSlug = docObj.templateSlug;
     if (typeof docObj.templateVersion === 'number')
       firestorePayload.templateVersion = docObj.templateVersion;
+    if (typeof docObj.dismissedTemplateVersion === 'number')
+      firestorePayload.dismissedTemplateVersion = docObj.dismissedTemplateVersion;
     if (docObj.goalInOneSentence) firestorePayload.goalInOneSentence = docObj.goalInOneSentence;
     if (docObj.experienceLevel) firestorePayload.experienceLevel = docObj.experienceLevel;
     if (docObj.whatDoneLooksLike) firestorePayload.whatDoneLooksLike = docObj.whatDoneLooksLike;

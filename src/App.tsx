@@ -29,6 +29,8 @@ import {
   getUserProjects,
   saveUserProjectContract,
   updateUserProjectStatus,
+  updateUserProjectFields,
+  listTemplates,
   deleteUserProject,
   UserProjectDoc,
   TaskContractFields,
@@ -67,6 +69,7 @@ import { ToolsProfileModal, ToolsCatalogData } from './components/ToolsProfileMo
 import { AdminView } from './components/AdminView.js';
 import { PlanView } from './components/PlanView.js';
 import { OnboardingView } from './components/OnboardingView.js';
+import { InstructionLinkCard, TemplateUpdateNotice } from './components/ProjectExtras.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
   Mic,
@@ -186,6 +189,9 @@ export default function App() {
   const [progressSummary, setProgressSummary] = useState<ProgressSummaryDoc | null>(null);
   const [routineProgressMap, setRoutineProgressMap] = useState<Record<string, RoutineProgressDoc>>({});
   const [userProjectsMap, setUserProjectsMap] = useState<Record<string, UserProjectDoc>>({});
+  // Track 4 MVP: latest published template versions (Firestore), used to
+  // show the per-project "newer version available" notice.
+  const [templateVersions, setTemplateVersions] = useState<Record<string, number>>({});
   const [userAudits, setUserAudits] = useState<AuditRunDoc[]>([]);
   const [shareCorrectionsWithNic, setShareCorrectionsWithNic] = useState<boolean>(false);
   const [showCalendarReminderModal, setShowCalendarReminderModal] = useState<boolean>(false);
@@ -526,6 +532,26 @@ export default function App() {
       }
     );
   }, []);
+
+  // Track 4 MVP: refresh latest template versions whenever the user changes
+  useEffect(() => {
+    if (!user) {
+      setTemplateVersions({});
+      return;
+    }
+    let cancelled = false;
+    listTemplates()
+      .then((templates) => {
+        if (cancelled) return;
+        const map: Record<string, number> = {};
+        for (const t of templates) map[t.slug] = t.version;
+        setTemplateVersions(map);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   // Create CalmGuideLiveClient ONCE on mount
   useEffect(() => {
@@ -1635,6 +1661,36 @@ export default function App() {
     }
   };
 
+  // Track 4 MVP: template-update notice choices. "Use new version" re-pins
+  // the project to the newer template version (saved contract untouched);
+  // "Not now" records the dismissal for that version only.
+  const handleTemplateUpdateChoice = async (
+    project: UserProjectDoc,
+    latestVersion: number,
+    accept: boolean
+  ) => {
+    if (!user) return;
+    try {
+      const updated = await updateUserProjectFields(
+        user.uid,
+        project.projectId,
+        accept
+          ? { templateVersion: latestVersion }
+          : { dismissedTemplateVersion: latestVersion }
+      );
+      if (updated) {
+        const nextMap = { ...userProjectsMapRef.current, [project.projectId]: updated };
+        setUserProjectsMap(nextMap);
+        userProjectsMapRef.current = nextMap;
+        clientRef.current?.updateConfig({ userProjects: nextMap });
+      }
+    } catch (err: any) {
+      setLiveError(
+        err?.message || "I couldn't save that choice right now. Check your connection and try again."
+      );
+    }
+  };
+
   const handleDeleteProject = async (project: UserProjectDoc) => {
     setOpenProjectMenuId(null);
     if (!user) return;
@@ -2547,6 +2603,35 @@ export default function App() {
                             <p className="text-[11px] text-[#57534E] line-clamp-2 leading-relaxed pt-1 border-t border-[#F4F0E8]">
                               {proj.contract.goal}
                             </p>
+                          )}
+
+                          {user &&
+                            proj.templateSlug &&
+                            proj.status !== 'needs_setup' &&
+                            (() => {
+                              const latest = templateVersions[proj.templateSlug];
+                              if (
+                                !latest ||
+                                latest <= (proj.templateVersion ?? 0) ||
+                                proj.dismissedTemplateVersion === latest
+                              )
+                                return null;
+                              return (
+                                <TemplateUpdateNotice
+                                  currentVersion={proj.templateVersion}
+                                  latestVersion={latest}
+                                  onUseNew={() =>
+                                    void handleTemplateUpdateChoice(proj, latest, true)
+                                  }
+                                  onDismiss={() =>
+                                    void handleTemplateUpdateChoice(proj, latest, false)
+                                  }
+                                />
+                              );
+                            })()}
+
+                          {user && proj.status !== 'needs_setup' && proj.contract?.goal && (
+                            <InstructionLinkCard projectId={proj.projectId} />
                           )}
                         </div>
                       );
