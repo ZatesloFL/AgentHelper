@@ -533,11 +533,11 @@ export const AdminView: React.FC<AdminViewProps> = ({ user, onBack }) => {
               disabled={importBusy}
               className="px-3.5 py-2 bg-[#1C1917] hover:bg-[#292524] text-white text-xs font-medium rounded-lg disabled:opacity-50 transition-colors"
             >
-              {importBusy ? 'Importing…' : 'Import the 4 finished records'}
+              {importBusy ? 'Importing…' : 'Import the 15 finished records (v4)'}
             </button>
             <span className="text-xs text-[#78716C]">
-              trip-planner v2 (fills the empty v1 layers) · insurance-bill-appeal ·
-              family-scheduler · daily-news-podcast
+              all 15 personal templates at version 4 — five platform layers each, with
+              requirements and two-mode run costs
             </span>
           </div>
           <textarea
