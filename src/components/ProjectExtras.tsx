@@ -57,7 +57,27 @@ type LinkStatus = { active: boolean; createdAt?: string | null; fetchCount?: num
 // The server stores only a hash of the token, so the working URL is shown
 // exactly once — right after Create/Reset. After that the card shows the
 // link is on (plus fetch count), and Reset is how you get a new one.
-export function InstructionLinkCard({ projectId }: { projectId: string }) {
+function timeAgo(iso?: string | null): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms) || ms < 0) return '';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+export function InstructionLinkCard({
+  projectId,
+  onHelpFinish,
+}: {
+  projectId: string;
+  /** Opens the Begin chat when a brief has gone unread for 48+ hours. */
+  onHelpFinish?: () => void;
+}) {
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -190,10 +210,30 @@ export function InstructionLinkCard({ projectId }: { projectId: string }) {
           <p className="text-[11px] text-[#57534E]">
             <strong className="text-[#1C1917]">On.</strong>{' '}
             {status.fetchCount
-              ? `Your assistant has read it ${status.fetchCount} time${status.fetchCount === 1 ? '' : 's'}${status.lastFetchedAt ? `, most recently ${new Date(status.lastFetchedAt).toLocaleString()}` : ''}.`
+              ? `Brief last read ${timeAgo(status.lastFetchedAt) || 'recently'} (${status.fetchCount} read${status.fetchCount === 1 ? '' : 's'} total).`
               : 'Your assistant hasn\u2019t read it yet.'}{' '}
             We can&apos;t show the link again — Reset makes a new one and stops the old one working.
           </p>
+          {!status.fetchCount &&
+            status.createdAt &&
+            Date.now() - new Date(status.createdAt).getTime() > 48 * 3600 * 1000 && (
+              <div className="rounded-md border border-[#D9C98A] bg-[#FBF6E3] px-2 py-1.5">
+                <p className="text-[11px] leading-relaxed text-[#57534E]">
+                  <strong className="text-[#1C1917]">Your helper hasn't read its brief yet.</strong>{' '}
+                  The link has been waiting more than two days — the Begin steps walk you through
+                  pasting it, it takes about two minutes.
+                </p>
+                {onHelpFinish && (
+                  <button
+                    type="button"
+                    onClick={onHelpFinish}
+                    className="mt-1 px-2.5 py-1.5 rounded-lg bg-[#405D1A] hover:bg-[#365013] text-white text-[11px] font-semibold transition-colors"
+                  >
+                    Help me finish
+                  </button>
+                )}
+              </div>
+            )}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"

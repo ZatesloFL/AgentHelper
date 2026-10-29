@@ -73,6 +73,7 @@ import { OnboardingView } from './components/OnboardingView.js';
 import { listTemplatesWithFallback } from './lib/templates.js';
 import type { TemplateDoc } from './lib/firebase.js';
 import { InstructionLinkCard, TemplateUpdateNotice } from './components/ProjectExtras.js';
+import { BeginProject } from './components/BeginProject.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
   Mic,
@@ -134,6 +135,8 @@ export default function App() {
   const [isPlanView, setIsPlanView] = useState<boolean>(false);
   const [isSetupView, setIsSetupView] = useState<boolean>(false);
   const [setupProjectId, setSetupProjectId] = useState<string | null>(null);
+  const [beginProjectId, setBeginProjectId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
   // User & Consent State
@@ -1809,6 +1812,15 @@ export default function App() {
           setSetupAtPicker(false);
           window.history.pushState({}, '', '/');
         }}
+        onSaved={(message) => {
+          setIsSetupView(false);
+          setSetupProjectId(null);
+          setSetupTemplateSlug(null);
+          setSetupAtPicker(false);
+          window.history.pushState({}, '', '/');
+          setToast(message);
+          setTimeout(() => setToast(null), 7000);
+        }}
         onProjectsChanged={(map) => {
           setUserProjectsMap(map);
           userProjectsMapRef.current = map;
@@ -1860,6 +1872,22 @@ export default function App() {
 
   return (
     <div className="min-h-dvh bg-[#FBF9F5] text-[#1C1917] flex flex-col font-sans selection:bg-[#EAE4D7]">
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-[#1C1917] text-white text-sm px-4 py-2.5 rounded-lg shadow-lg">
+          {toast}
+        </div>
+      )}
+      {user && beginProjectId && userProjectsMap[beginProjectId] && (
+        <BeginProject
+          user={user}
+          project={userProjectsMap[beginProjectId]}
+          onClose={() => setBeginProjectId(null)}
+          onProjectsChanged={(map) => {
+            setUserProjectsMap(map);
+            userProjectsMapRef.current = map;
+          }}
+        />
+      )}
       {/* Top Bar Contract */}
       <TopNav
         user={user}
@@ -2576,7 +2604,8 @@ export default function App() {
                                     <span>Move down a rung</span>
                                   </button>
 
-                                  <button
+                                  {(proj.status === 'active' || proj.status === 'paused') && (
+<button
                                     type="button"
                                     onClick={() => handleTogglePauseProject(proj)}
                                     className="w-full px-3 py-1.5 text-left hover:bg-[#F4F0E8] text-[#1C1917] flex items-center gap-2"
@@ -2593,6 +2622,7 @@ export default function App() {
                                       </>
                                     )}
                                   </button>
+)}
 
                                   <div className="my-1 border-t border-[#F4F0E8]" />
 
@@ -2653,6 +2683,16 @@ export default function App() {
                             </button>
                           )}
 
+                          {proj.status === 'ready' && (
+                            <button
+                              type="button"
+                              onClick={() => setBeginProjectId(proj.projectId)}
+                              className="w-full px-3 py-2 rounded-lg bg-[#405D1A] hover:bg-[#365013] text-white text-[11px] font-semibold transition-colors"
+                            >
+                              Begin this project →
+                            </button>
+                          )}
+
                           {proj.contract?.goal && (
                             <p className="text-[11px] text-[#57534E] line-clamp-2 leading-relaxed pt-1 border-t border-[#F4F0E8]">
                               {proj.contract.goal}
@@ -2684,9 +2724,15 @@ export default function App() {
                               );
                             })()}
 
-                          {user && proj.status !== 'needs_setup' && proj.contract?.goal && (
-                            <InstructionLinkCard projectId={proj.projectId} />
-                          )}
+                          {user &&
+                            proj.status !== 'needs_setup' &&
+                            proj.status !== 'ready' &&
+                            proj.contract?.goal && (
+                              <InstructionLinkCard
+                                projectId={proj.projectId}
+                                onHelpFinish={() => setBeginProjectId(proj.projectId)}
+                              />
+                            )}
                         </div>
                       );
                     })}

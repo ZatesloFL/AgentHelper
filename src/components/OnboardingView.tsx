@@ -64,8 +64,27 @@ const BLANK_GUARDRAILS = {
 
 type Phase = 'loading' | 'general' | 'picker' | 'intake' | 'notice' | 'error';
 type GeneralStep = 'welcome' | 'assistant' | 'plate' | 'lane' | 'next';
-type IntakeStep = 'opening' | 'assistant' | 'layer' | 'slots' | 'guardrails' | 'closing';
-const INTAKE_STEPS: IntakeStep[] = ['opening', 'assistant', 'layer', 'slots', 'guardrails'];
+// Redesign spec (2026-10-29): setup is four steps — Overview, Agent & plan,
+// Make it yours (guided questions), Review. The old platform-instructions
+// step is gone: its warnings live in the Overview and its setup steps in
+// the Begin chat. Saving produces a READY project (no token minted);
+// Begin mints the token and confirms the helper loaded the brief.
+type IntakeStep = 'overview' | 'agent' | 'questions' | 'review';
+const INTAKE_STEPS: IntakeStep[] = ['overview', 'agent', 'questions', 'review'];
+const LEGACY_STEP_MAP: Record<string, IntakeStep> = {
+  opening: 'overview',
+  assistant: 'agent',
+  layer: 'agent',
+  slots: 'questions',
+  guardrails: 'review',
+  closing: 'overview',
+};
+
+const PLAN_OPTIONS = [
+  { id: 'free', name: 'Free' },
+  { id: 'paid', name: 'Paid' },
+  { id: 'notsure', name: "Not sure" },
+];
 
 function agentName(id?: string): string {
   return AGENT_OPTIONS.find((a) => a.id === id)?.name || 'Meta Muse';
@@ -79,6 +98,270 @@ function asLines(v: string | string[] | undefined): string {
 function layerClaimText(item: any): string {
   if (typeof item === 'string') return item;
   return typeof item?.text === 'string' ? item.text : '';
+}
+
+// ---------- setup questions + deterministic contract composition ----------
+// Spec sections 5-6: chip/choice answers are bounded vocabulary and may be
+// woven into the contract as labeled lines; free text from the member is
+// DATA (memberNotes / the served brief's "Member's notes" block), never
+// concatenated into instruction fields — except on blank projects, where
+// the member's own words are the contract's source, as the old flow did.
+import type { TemplateQuestion } from '../lib/firebase.js';
+
+const GENERIC_TEMPLATE_QUESTIONS: TemplateQuestion[] = [
+  {
+    id: 'specifics',
+    label: 'Anything specific',
+    prompt: 'Anything specific your helper should know about this project — places, people, dates, preferences?',
+    type: 'text',
+    required: false,
+    mapsTo: 'memberNotes',
+  },
+  {
+    id: 'when',
+    label: 'When',
+    prompt: 'When should this run, or when will you start it?',
+    type: 'text',
+    required: false,
+    mapsTo: 'schedule',
+  },
+];
+
+const BLANK_QUESTIONS: TemplateQuestion[] = [
+  {
+    id: 'your-idea',
+    label: 'Your idea',
+    prompt: 'What do you want help with? Say it the way you\'d say it to a person.',
+    type: 'text',
+    required: true,
+    mapsTo: 'goal',
+  },
+  {
+    id: 'how-often',
+    label: 'How often',
+    prompt: 'How often should this happen?',
+    type: 'choice',
+    options: ['Every day', 'Every week', 'When I ask', 'Once, to try it'],
+    required: true,
+    default: 'When I ask',
+    mapsTo: 'schedule',
+  },
+  {
+    id: 'never-do',
+    label: 'Never do',
+    prompt: 'Anything your helper should never do on this project?',
+    type: 'text',
+    required: false,
+    mapsTo: 'do_not',
+  },
+  {
+    id: 'check-in-style',
+    label: 'Check-ins',
+    prompt: 'How should your helper report back?',
+    type: 'choice',
+    options: ['A short summary', 'A detailed rundown', 'Only when something needs me'],
+    required: false,
+    default: 'A short summary',
+    mapsTo: 'report_back',
+  },
+];
+
+function effectiveQuestions(
+  template: TemplateDoc | null,
+  project: UserProjectDoc | null,
+): TemplateQuestion[] {
+  if (template?.questions && template.questions.length > 0) return template.questions;
+  if (template || project?.templateSlug) return GENERIC_TEMPLATE_QUESTIONS;
+  return BLANK_QUESTIONS;
+}
+
+function serializeAnswer(q: TemplateQuestion, raw: any): string {
+  if (raw === undefined || raw === null) return '';
+  if (Array.isArray(raw)) return raw.map((x) => String(x)).join(', ');
+  if (typeof raw === 'object') return '';
+  return String(raw);
+}
+
+function defaultAnswer(q: TemplateQuestion): string {
+  if (q.default === undefined) return '';
+  return serializeAnswer(q, q.default);
+}
+
+interface ComposedContract {
+  contract: TaskContractFields;
+  checkInRhythm: string;
+  whatDoneLooksLike: string;
+  memberNotes: string;
+  whenText: string;
+  goalAdditions: string[];
+  sectionAdditions: Record<string, string[]>;
+}
+
+/** Deterministic fill (spec section 5): template lines are the base;
+ * answers modify them by fixed rules only. No rephrasing, no model. */
+function composeContract(
+  template: TemplateDoc | null,
+  project: UserProjectDoc | null,
+  questions: TemplateQuestion[],
+  answers: Record<string, string>,
+): ComposedContract {
+  const isBlank = !template;
+  const base = (key: 'do' | 'do_not' | 'ask_me_before' | 'report_back' | 'stop_if'): string[] => {
+    const fromTpl = template?.contract?.[key];
+    const lines = asLines(fromTpl as any)
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (lines.length) return lines;
+    if (isBlank) {
+      return asLines((BLANK_GUARDRAILS as any)[key])
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+  const sections: Record<string, string[]> = {
+    do: base('do'),
+    do_not: base('do_not'),
+    ask_me_before: base('ask_me_before'),
+    report_back: base('report_back'),
+    stop_if: base('stop_if'),
+  };
+  const goalAdditions: string[] = [];
+  const notes: string[] = [];
+  if (project?.brainstormNotes?.trim()) notes.push(project.brainstormNotes.trim());
+  let goalText = isBlank
+    ? ''
+    : template?.contract?.goal || template?.goalInOneSentence || project?.goalInOneSentence || '';
+  let doneText = template?.whatDoneLooksLike || project?.whatDoneLooksLike || '';
+  const scheduleParts: string[] = [];
+  let daysPart = '';
+  let timePart = '';
+
+  for (const q of questions) {
+    const ans = (answers[q.id] || '').trim();
+    if (!ans) continue;
+    const follow = (answers[`${q.id}__followup`] || '').trim();
+    const isTextLike = q.type === 'text' || q.type === 'number';
+    if (q.mapsTo === 'schedule') {
+      if (q.type === 'days') daysPart = ans;
+      else if (q.type === 'time') timePart = ans;
+      else scheduleParts.push(ans);
+      continue;
+    }
+    if (q.mapsTo === 'doneLooksLike') {
+      doneText = ans;
+      continue;
+    }
+    if (isTextLike) {
+      if (isBlank && q.mapsTo === 'goal') {
+        goalText = ans;
+      } else if (q.mapsTo === 'goal') {
+        goalAdditions.push(`${q.label}: ${ans}.`);
+      } else if (isBlank && q.mapsTo !== 'memberNotes') {
+        sections[q.mapsTo] = [
+          ...sections[q.mapsTo],
+          ...ans.split('\n').map((s) => s.trim()).filter(Boolean),
+        ];
+      } else {
+        notes.push(`${q.label}: ${ans}${follow ? ` (${follow})` : ''}`);
+      }
+      continue;
+    }
+    // bounded-vocabulary answers become labeled lines in their section
+    const line = `${q.label}: ${ans}.`;
+    if (q.mapsTo === 'goal') goalAdditions.push(line);
+    else if (q.mapsTo === 'memberNotes') notes.push(line);
+    else sections[q.mapsTo] = [...sections[q.mapsTo], line];
+    if (follow) notes.push(`${q.label} — more: ${follow}`);
+  }
+
+  let rhythm = '';
+  if (daysPart && timePart) rhythm = `${daysPart} at ${timePart}`;
+  else if (daysPart || timePart) rhythm = daysPart || timePart;
+  if (scheduleParts.length) rhythm = [rhythm, ...scheduleParts].filter(Boolean).join(' · ');
+  if (!rhythm) rhythm = template?.checkInRhythm || project?.checkInRhythm || '';
+
+  const goalFull = [goalText, ...goalAdditions].filter(Boolean).join(' ');
+  const memberNotes = notes.join('\n');
+  return {
+    contract: {
+      goal: memberNotes ? `${goalFull}\n\nDetails from me: ${memberNotes}` : goalFull,
+      do: sections.do.join('\n'),
+      do_not: sections.do_not.join('\n'),
+      ask_me_before: sections.ask_me_before.join('\n'),
+      report_back: sections.report_back.join('\n'),
+      stop_if: sections.stop_if.join('\n'),
+    },
+    checkInRhythm: rhythm,
+    whatDoneLooksLike: doneText,
+    memberNotes,
+    whenText: rhythm,
+    goalAdditions,
+    sectionAdditions: sections,
+  };
+}
+
+const TIER_RANK: Record<string, number> = { free: 0, paid: 1, premium: 2 };
+
+/** Plan-fit lines for one layer under the member's stated plan (spec
+ * section 4). Conflict-basis cells stay silent — nothing is claimed. */
+function planFitLines(layer: TemplateLayer | null, planChoice: string): string[] {
+  const lines: string[] = [];
+  const modes = (layer as any)?.requirements?.runModes;
+  if (!layer) return lines;
+  if (!modes) {
+    if (layer.minimumPlan) lines.push(`Works on: ${layer.minimumPlan}.`);
+    return lines;
+  }
+  const planRank = planChoice === 'free' ? 0 : planChoice === 'paid' ? 1 : -1;
+  const modeLine = (mode: any, label: string): string | null => {
+    if (!mode) return null;
+    if (mode.possible === false) return `${label}: can't run this way here.`;
+    const mp = mode.minPlan;
+    if (!mp) return `${label}: works.`;
+    if (mp.basis === 'conflict') return null;
+    const need = `${label}: needs ${mp.planName}${mp.priceMonthlyUSD ? ` ($${mp.priceMonthlyUSD}/month)` : ''}`;
+    if (planRank < 0) return need + '.';
+    const have = TIER_RANK[String(mp.tier || 'free').toLowerCase()] ?? 0;
+    return have <= planRank ? `${label}: works on your plan.` : `${need} — your plan doesn't cover this yet.`;
+  };
+  const a = modeLine(modes.onDemand, 'When you start it yourself');
+  const b = modeLine(modes.scheduled, 'On a schedule');
+  if (a) lines.push(a);
+  if (b) lines.push(b);
+  if (modes.scheduled?.possible === false && (layer as any)?.requirements?.runFallback) {
+    lines.push(`Instead: ${(layer as any).requirements.runFallback}`);
+  }
+  if (modes.onDemand?.degrades || modes.scheduled?.degrades) {
+    lines.push('Some quality trade-offs apply on this helper — the steps will call them out.');
+  }
+  return lines;
+}
+
+/** Overview capability block: for a known agent, surface wontDo lines that
+ * contradict what the project needs (spec section 3). */
+function capabilityWarnings(template: TemplateDoc | null, layer: TemplateLayer | null): string[] {
+  const req = (layer as any)?.requirements;
+  if (!template || !layer || !req?.needs) return [];
+  const wont = (layer.wontDo || []).map(layerClaimText).filter(Boolean);
+  const checks: Array<[boolean, string[]]> = [
+    [Boolean(req.needs.voiceReadAloud), ['voice', 'read aloud', 'audio', 'speak']],
+    [Boolean(req.needs.fileUploads), ['file', 'upload', 'document', 'pdf']],
+    [Boolean(req.needs.webBrowsing), ['web', 'brows', 'search the internet']],
+    [Boolean(req.needs.calendarWrite || req.needs.calendarRead), ['calendar']],
+    [Boolean(req.needs.emailSend || req.needs.emailRead), ['email', 'gmail']],
+  ];
+  const out: string[] = [];
+  for (const [needed, words] of checks) {
+    if (!needed) continue;
+    for (const line of wont) {
+      const low = line.toLowerCase();
+      if (words.some((w) => low.includes(w))) out.push(line);
+    }
+  }
+  return out;
 }
 
 const inputCls =
@@ -100,8 +383,11 @@ export const OnboardingView: React.FC<{
   initialTemplateSlug?: string | null;
   startAtPicker?: boolean;
   onClose: () => void;
+  /** Called instead of onClose after a successful save: the redesign sends
+   * the member back to the main UI, where a toast confirms the save. */
+  onSaved?: (message: string) => void;
   onProjectsChanged: (projects: Record<string, UserProjectDoc>) => void;
-}> = ({ user, projects, bookingUrl, initialProjectId, initialTemplateSlug, startAtPicker, onClose, onProjectsChanged }) => {
+}> = ({ user, projects, bookingUrl, initialProjectId, initialTemplateSlug, startAtPicker, onClose, onSaved, onProjectsChanged }) => {
   const [phase, setPhase] = useState<Phase>('loading');
   const [noticeText, setNoticeText] = useState<string>('');
   const [onboarding, setOnboarding] = useState<MemberOnboardingDoc | null>(null);
@@ -118,8 +404,11 @@ export const OnboardingView: React.FC<{
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [template, setTemplate] = useState<TemplateDoc | null>(null);
   const [templateMissing, setTemplateMissing] = useState(false);
-  const [intakeStep, setIntakeStep] = useState<IntakeStep>('opening');
+  const [intakeStep, setIntakeStep] = useState<IntakeStep>('overview');
   const [slots, setSlots] = useState<Record<string, string>>({});
+  const [planChoice, setPlanChoice] = useState<string>('notsure');
+  const [qIndex, setQIndex] = useState(0);
+  const [returnToReview, setReturnToReview] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -159,30 +448,22 @@ export const OnboardingView: React.FC<{
     }
     setTemplate(tpl);
     const saved = project.intake;
-    const defaults: Record<string, string> = {
-      goal:
-        tpl?.contract?.goal ||
-        tpl?.goalInOneSentence ||
-        project.goalInOneSentence ||
-        project.contract?.goal ||
-        '',
-      specifics: '',
-      done: tpl?.whatDoneLooksLike || project.whatDoneLooksLike || '',
-      rhythm: tpl?.checkInRhythm || project.checkInRhythm || '',
-      g_do: asLines(tpl?.contract?.do) || BLANK_GUARDRAILS.do,
-      g_do_not: asLines(tpl?.contract?.do_not) || BLANK_GUARDRAILS.do_not,
-      g_ask: asLines(tpl?.contract?.ask_me_before) || BLANK_GUARDRAILS.ask_me_before,
-      g_report: asLines(tpl?.contract?.report_back) || BLANK_GUARDRAILS.report_back,
-      g_stop: asLines(tpl?.contract?.stop_if) || BLANK_GUARDRAILS.stop_if,
-    };
-    setSlots({ ...defaults, ...(saved?.slots || {}) });
+    // Slots ARE the question answers now (plus __plan). Saved answers from
+    // an interrupted intake pre-answer their questions (spec section 5).
+    const seedAnswers: Record<string, string> = { ...(saved?.slots || {}) };
+    setSlots(seedAnswers);
+    setPlanChoice(seedAnswers.__plan || 'notsure');
     setAssistantChoice(saved?.agentChoice || onboarding?.assistantProduct || 'unsure');
     setGeminiAccountType(saved?.geminiAccountType || '');
     setConfirmed(false);
-    const resumeAt = saved && !saved.completed && INTAKE_STEPS.includes(saved.step as IntakeStep)
-      ? (saved.step as IntakeStep)
-      : 'opening';
-    setIntakeStep(project.intake?.completed ? 'opening' : resumeAt);
+    setReturnToReview(false);
+    const qs = effectiveQuestions(tpl, project);
+    const firstUnanswered = qs.findIndex((q) => !(seedAnswers[q.id] || '').trim());
+    setQIndex(firstUnanswered === -1 ? Math.max(0, qs.length - 1) : firstUnanswered);
+    const mapped = LEGACY_STEP_MAP[saved?.step || ''];
+    const resumeAt: IntakeStep =
+      saved && !saved.completed && mapped ? mapped : 'overview';
+    setIntakeStep(project.intake?.completed ? 'overview' : resumeAt);
     setPhase('intake');
   };
 
@@ -207,7 +488,9 @@ export const OnboardingView: React.FC<{
         const project = map[initialProjectId];
         if (project && project.status !== 'needs_setup') {
           setNoticeText(
-            `"${project.title || 'That project'}" is already set up — there's nothing left to do here. You can open it from your projects.`,
+            project.status === 'ready'
+              ? `"${project.title || 'That project'}" is saved and ready. When you want to start it, choose "Begin this project" on its card in your projects.`
+              : `"${project.title || 'That project'}" is already set up — there's nothing left to do here. You can open it from your projects.`,
           );
           setPhase('notice');
           return;
@@ -347,38 +630,39 @@ export const OnboardingView: React.FC<{
     if (!activeProject || !confirmed) return;
     setSaving(true);
     setSaveError(null);
-    const goalText = (slots.goal || '').trim();
-    const specifics = (slots.specifics || '').trim();
-    const contract: TaskContractFields = {
-      // Member specifics ride inside the goal — it is the field their helper
-      // actually works from, so nothing they typed is dropped.
-      goal: specifics ? `${goalText}\n\nDetails from me: ${specifics}` : goalText,
-      do: slots.g_do || '',
-      do_not: slots.g_do_not || '',
-      ask_me_before: slots.g_ask || '',
-      report_back: slots.g_report || '',
-      stop_if: slots.g_stop || '',
-    };
+    const questions = effectiveQuestions(template, activeProject);
+    const composed = composeContract(template, activeProject, questions, slots);
     const product = assistantChoice === 'unsure' ? 'muse' : assistantChoice;
+    // Redesign rule: saving makes the project READY, never active — the
+    // helper only starts when the member begins it (Begin chat mints the
+    // token and confirms the load). An already-live project keeps its state.
+    const keepStatus =
+      activeProject.status === 'active' || activeProject.status === 'paused'
+        ? activeProject.status
+        : 'ready';
     try {
       await saveUserProjectContract(user.uid, activeProject.projectId, {
         title: activeProject.title || template?.title,
         product,
-        contract,
+        contract: composed.contract,
         rung: 0,
-        status: 'active',
+        status: keepStatus,
       });
       await updateUserProjectFields(user.uid, activeProject.projectId, {
         intake: {
-          step: 'closing',
+          step: 'review',
           slots,
           agentChoice: assistantChoice,
           ...(geminiAccountType ? { geminiAccountType } : {}),
           completed: true,
           updatedAt: new Date().toISOString(),
         },
-        ...(slots.done?.trim() ? { whatDoneLooksLike: slots.done.trim() } : {}),
-        ...(slots.rhythm?.trim() ? { checkInRhythm: slots.rhythm.trim() } : {}),
+        ...(composed.whatDoneLooksLike.trim()
+          ? { whatDoneLooksLike: composed.whatDoneLooksLike.trim() }
+          : {}),
+        ...(composed.checkInRhythm.trim()
+          ? { checkInRhythm: composed.checkInRhythm.trim() }
+          : {}),
       });
       if (onboarding && !onboarding.completed) {
         const saved = await saveMemberOnboarding(user.uid, {
@@ -388,7 +672,12 @@ export const OnboardingView: React.FC<{
         if (saved) setOnboarding(saved);
       }
       await refreshProjects();
-      setIntakeStep('closing');
+      const title = activeProject.title || template?.title || 'Your project';
+      if (onSaved) {
+        onSaved(`${title} saved. Begin it when you're ready.`);
+      } else {
+        onClose();
+      }
     } catch (e: any) {
       setSaveError(
         e?.message ||
@@ -755,10 +1044,12 @@ export const OnboardingView: React.FC<{
                 <p className="text-sm font-medium text-[#1C1917]">{t.title}</p>
                 {t.category && <p className="text-xs text-[#78716C] mb-1">{t.category}</p>}
                 <p className="text-sm text-[#57534E] mb-3">
-                  {t.goalInOneSentence || 'A ready-made project with the steps written for you.'}
+                  {t.shortDescription ||
+                    t.goalInOneSentence ||
+                    'A ready-made project with the steps written for you.'}
                 </p>
                 <button onClick={() => startTemplateProject(t)} className={ghostBtn}>
-                  Start this project
+                  Explore this project
                 </button>
               </div>
             ))}
@@ -829,111 +1120,360 @@ export const OnboardingView: React.FC<{
   const rawLayer: TemplateLayer | string | undefined = template?.platformLayers?.[product];
   const layer: TemplateLayer | null =
     rawLayer && typeof rawLayer === 'object' ? rawLayer : null;
-  const layerText = typeof rawLayer === 'string' && rawLayer.trim() ? rawLayer : null;
+  const questions = effectiveQuestions(template, activeProject);
+  const composed = composeContract(template, activeProject, questions, slots);
   const stepIdx = INTAKE_STEPS.indexOf(intakeStep as IntakeStep);
-  const intakeBack = () => {
-    if (stepIdx > 0) goIntakeStep(INTAKE_STEPS[stepIdx - 1]);
-  };
-  const intakeNext = () => {
-    if (stepIdx >= 0 && stepIdx < INTAKE_STEPS.length - 1) goIntakeStep(INTAKE_STEPS[stepIdx + 1]);
-  };
   const setSlot = (k: string, v: string) => setSlots((s) => ({ ...s, [k]: v }));
 
-  const openingCard = () => {
-    if (activeProject.startedAs === 'brainstorm-first' && activeProject.brainstormNotes) {
-      return card(
-        <>
-          <h2 className="font-medium text-[#1C1917] mb-2">Here's what you told us</h2>
-          <p className={helpCls}>
-            When you brainstormed this project, you worked out the shape of it. Read it over — the
-            next steps check it with you, and your edits win.
-          </p>
-          <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg p-4 text-sm text-[#1C1917] whitespace-pre-wrap">
-            {activeProject.brainstormNotes}
+  const answerQuestion = async (q: TemplateQuestion, value: string) => {
+    const next = { ...slots, [q.id]: value };
+    setSlots(next);
+    await persistIntake(intakeStep as IntakeStep, next, assistantChoice);
+  };
+
+  const followUpApplies = (q: TemplateQuestion): boolean => {
+    if (!q.followUp) return false;
+    const w = q.followUp.when;
+    if (w === 'any' || w === 'always') return true;
+    return (slots[q.id] || '').toLowerCase().includes(w.toLowerCase());
+  };
+
+  const advanceQuestion = () => {
+    // Fold a multiChips "Other" free entry into the current answer.
+    const cur = questions[qIndex];
+    if (cur && (slots[`${cur.id}__other`] || '').trim()) {
+      const merged = [slots[cur.id] || '', slots[`${cur.id}__other`].trim()]
+        .filter(Boolean)
+        .join(', ');
+      const next = { ...slots, [cur.id]: merged, [`${cur.id}__other`]: '' };
+      setSlots(next);
+      void persistIntake(intakeStep as IntakeStep, next, assistantChoice);
+    }
+    if (returnToReview) {
+      setReturnToReview(false);
+      setIntakeStep('review');
+      void persistIntake('review', slots, assistantChoice);
+      return;
+    }
+    if (qIndex < questions.length - 1) {
+      setQIndex(qIndex + 1);
+    } else {
+      setIntakeStep('review');
+      void persistIntake('review', slots, assistantChoice);
+    }
+  };
+
+  const editQuestion = (qid: string) => {
+    const idx = questions.findIndex((q) => q.id === qid);
+    if (idx === -1) return;
+    setQIndex(idx);
+    setReturnToReview(true);
+    setIntakeStep('questions');
+  };
+
+  const fitAgents = ['muse', 'grok', 'chatgpt', 'gemini'];
+  const warnings = capabilityWarnings(template, layer);
+  const fitLines = planFitLines(layer, planChoice);
+
+  const chipBtn = (active: boolean) =>
+    `px-3 py-1.5 rounded-full border text-sm transition-colors ${
+      active
+        ? 'bg-[#405D1A] text-white border-[#405D1A]'
+        : 'bg-white text-[#1C1917] border-[#E6DFD3] hover:border-[#405D1A]'
+    }`;
+
+  const renderQuestionControls = (q: TemplateQuestion) => {
+    const current = slots[q.id] || '';
+    if (q.type === 'chips' || q.type === 'choice') {
+      return (
+        <div className="flex flex-wrap gap-2">
+          {(q.options || []).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              className={chipBtn(current === opt)}
+              onClick={() => void answerQuestion(q, opt)}
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      );
+    }
+    if (q.type === 'multiChips') {
+      const selected = current ? current.split(', ').filter(Boolean) : [];
+      const toggle = (opt: string) => {
+        const next = selected.includes(opt)
+          ? selected.filter((s) => s !== opt)
+          : [...selected, opt];
+        void answerQuestion(q, next.join(', '));
+      };
+      return (
+        <div>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {(q.options || []).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                className={chipBtn(selected.includes(opt))}
+                onClick={() => toggle(opt)}
+              >
+                {opt}
+              </button>
+            ))}
           </div>
-        </>,
-      );
-    }
-    if (template) {
-      return card(
-        <>
-          <h2 className="font-medium text-[#1C1917] mb-2">{template.title}</h2>
-          {activeProject.startedAs === 'gift-arrival' && (
-            <p className="text-sm text-[#57534E] mb-3">
-              This project was picked with your gift. Here's what it does — setup takes about five
-              minutes, one step at a time.
-            </p>
+          {q.allowOther && (
+            <input
+              className={inputCls}
+              placeholder="Something else? Type it here — it joins your picks when you continue"
+              value={slots[`${q.id}__other`] || ''}
+              onChange={(e) => setSlot(`${q.id}__other`, e.target.value)}
+            />
           )}
-          <dl className="text-sm space-y-2">
-            {template.goalInOneSentence && (
-              <div>
-                <dt className="font-medium text-[#1C1917]">The goal</dt>
-                <dd className="text-[#57534E]">{template.goalInOneSentence}</dd>
-              </div>
-            )}
-            {template.whatDoneLooksLike && (
-              <div>
-                <dt className="font-medium text-[#1C1917]">What "done" looks like</dt>
-                <dd className="text-[#57534E]">{template.whatDoneLooksLike}</dd>
-              </div>
-            )}
-            {template.checkInRhythm && (
-              <div>
-                <dt className="font-medium text-[#1C1917]">Check-ins</dt>
-                <dd className="text-[#57534E]">{template.checkInRhythm}</dd>
-              </div>
-            )}
-            {template.experienceLevel && (
-              <div>
-                <dt className="font-medium text-[#1C1917]">Experience level</dt>
-                <dd className="text-[#57534E]">{template.experienceLevel}</dd>
-              </div>
-            )}
-          </dl>
-          <p className="text-sm text-[#57534E] mt-3">
-            Still right? You'll be able to adjust every part of it in the next steps — your words
-            win over the template's.
-          </p>
-        </>,
+          <p className="text-xs text-[#78716C] mt-1">Pick any that fit, then Continue.</p>
+        </div>
       );
     }
-    return card(
-      <>
-        <h2 className="font-medium text-[#1C1917] mb-2">Your own project, your own words</h2>
-        <p className="text-sm text-[#57534E]">
-          No template here — the next steps shape your idea into a project: what you want, what
-          "done" looks like, and the guardrails your helper works within.
-        </p>
-      </>,
+    if (q.type === 'days') {
+      const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const selected = current ? current.split(', ').filter(Boolean) : [];
+      const presets: Record<string, string[]> = {
+        'Every day': days,
+        Weekdays: days.slice(0, 5),
+        Weekends: days.slice(5),
+      };
+      return (
+        <div>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {Object.keys(presets).map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={chipBtn(current === presets[p].join(', '))}
+                onClick={() => void answerQuestion(q, presets[p].join(', '))}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {days.map((d) => (
+              <button
+                key={d}
+                type="button"
+                className={chipBtn(selected.includes(d))}
+                onClick={() => {
+                  const next = selected.includes(d)
+                    ? selected.filter((s) => s !== d)
+                    : [...selected, d];
+                  void answerQuestion(q, next.join(', '));
+                }}
+              >
+                {d.slice(0, 3)}
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    if (q.type === 'time') {
+      return (
+        <input
+          type="time"
+          className={inputCls + ' max-w-[200px]'}
+          value={current}
+          onChange={(e) => void answerQuestion(q, e.target.value)}
+        />
+      );
+    }
+    if (q.type === 'number') {
+      return (
+        <input
+          type="number"
+          min={0}
+          className={inputCls + ' max-w-[200px]'}
+          value={current}
+          onChange={(e) => void answerQuestion(q, e.target.value)}
+          placeholder="Type a number"
+        />
+      );
+    }
+    return (
+      <textarea
+        className={inputCls}
+        rows={3}
+        value={current}
+        onChange={(e) => setSlot(q.id, e.target.value)}
+        onBlur={() => void answerQuestion(q, slots[q.id] || '')}
+        placeholder="Type your answer"
+      />
     );
   };
+
+  const reviewRow = (
+    title: string,
+    body: string,
+    editQid?: string,
+  ) => (
+    <div className="flex items-start justify-between gap-3 py-2 border-b border-[#F4F0E8] last:border-0">
+      <div className="min-w-0">
+        <p className="text-xs font-medium uppercase tracking-wide text-[#78716C]">{title}</p>
+        <p className="text-sm text-[#1C1917] whitespace-pre-wrap">{body || '—'}</p>
+      </div>
+      {editQid && (
+        <button
+          type="button"
+          onClick={() => editQuestion(editQid)}
+          className="shrink-0 text-xs text-[#405D1A] underline"
+        >
+          Edit
+        </button>
+      )}
+    </div>
+  );
+
+  const firstQidFor = (mapsTo: string) => questions.find((q) => q.mapsTo === mapsTo)?.id;
+
+  const currentQ = questions[qIndex];
+  const answeredCount = questions.filter((q) => (slots[q.id] || '').trim()).length;
+  const currentAnswered = currentQ ? Boolean((slots[currentQ.id] || '').trim()) : false;
+  const canAdvance =
+    !currentQ || !currentQ.required || currentAnswered || Boolean(defaultAnswer(currentQ));
 
   return (
     <div className="min-h-screen bg-[#FBF9F5] px-4 sm:px-6 py-8">
       <div className="max-w-3xl mx-auto">
         {header(
           'Set up your project',
-          intakeStep === 'closing'
-            ? undefined
-            : `Step ${stepIdx + 1} of ${INTAKE_STEPS.length} — your progress saves as you go`,
+          `Step ${stepIdx + 1} of ${INTAKE_STEPS.length} — your progress saves as you go`,
         )}
 
-        {activeProject.sessionFirst && intakeStep === 'opening' && laneModule(true)}
+        {activeProject.sessionFirst && intakeStep === 'overview' && laneModule(true)}
 
-        {intakeStep === 'opening' && openingCard()}
-
-        {intakeStep === 'assistant' &&
+        {intakeStep === 'overview' &&
           card(
             <>
-              <h2 className="font-medium text-[#1C1917] mb-2">
-                Which helper takes this project?
-              </h2>
+              {activeProject.startedAs === 'brainstorm-first' && activeProject.brainstormNotes ? (
+                <>
+                  <h2 className="font-medium text-[#1C1917] mb-2">Here's what you told us</h2>
+                  <p className={helpCls}>
+                    When you brainstormed this project, you worked out its shape. The next steps
+                    check it with you — your edits win.
+                  </p>
+                  <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg p-4 text-sm text-[#1C1917] whitespace-pre-wrap mb-4">
+                    {activeProject.brainstormNotes}
+                  </div>
+                </>
+              ) : template ? (
+                <>
+                  <h2 className="font-medium text-[#1C1917] mb-2">{template.title}</h2>
+                  {activeProject.startedAs === 'gift-arrival' && (
+                    <p className="text-sm text-[#57534E] mb-3">
+                      This project came with your gift. Here's what it does — setup takes about
+                      five minutes, one step at a time.
+                    </p>
+                  )}
+                  <p className="text-sm text-[#57534E] mb-4">
+                    {template.narrative ||
+                      template.goalInOneSentence ||
+                      'A ready-made project with the steps written for you.'}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 className="font-medium text-[#1C1917] mb-2">Your own project, your own words</h2>
+                  <p className="text-sm text-[#57534E] mb-4">
+                    No template here — a few questions shape your idea into a project: what you
+                    want, how often, and the guardrails your helper works within.
+                  </p>
+                </>
+              )}
+
+              {template && questions.length > 0 && (
+                <div className="mb-4">
+                  <h3 className="text-sm font-medium text-[#1C1917] mb-1">You'll choose</h3>
+                  <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-0.5">
+                    {questions.map((q) => (
+                      <li key={q.id}>{q.label}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {template && assistantChoice !== 'unsure' && layer && (
+                <div className="mb-2">
+                  <h3 className="text-sm font-medium text-[#1C1917] mb-1">
+                    What {agentName(product)} can do for this project
+                  </h3>
+                  {layer.willDo && layer.willDo.length > 0 && (
+                    <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-0.5 mb-2">
+                      {layer.willDo.slice(0, 4).map((w, i) => (
+                        <li key={i}>{layerClaimText(w)}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {warnings.length > 0 && (
+                    <div className="rounded-lg border border-[#D9C98A] bg-[#FBF6E3] px-3 py-2">
+                      <p className="text-sm font-medium text-[#1C1917] mb-1">Worth knowing</p>
+                      <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-0.5">
+                        {warnings.map((w, i) => (
+                          <li key={i}>
+                            {agentName(product)} won't: {w}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-sm text-[#57534E] mt-1">
+                        The Begin steps will show the workaround, if there is one.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {template && assistantChoice === 'unsure' && (
+                <div className="mb-2">
+                  <h3 className="text-sm font-medium text-[#1C1917] mb-1">
+                    How this project runs on each helper
+                  </h3>
+                  <div className="space-y-1.5">
+                    {fitAgents.map((aid) => {
+                      const l: any = template.platformLayers?.[aid];
+                      const modes = l?.requirements?.runModes;
+                      const sched = modes?.scheduled;
+                      const schedText =
+                        sched?.possible === false
+                          ? 'No schedule'
+                          : sched?.minPlan && sched.minPlan.basis !== 'conflict'
+                            ? `Schedule needs ${sched.minPlan.planName}`
+                            : sched
+                              ? 'Can run on a schedule'
+                              : 'Details in step 2';
+                      return (
+                        <p key={aid} className="text-sm text-[#57534E]">
+                          <span className="font-medium text-[#1C1917]">{agentName(aid)}:</span>{' '}
+                          {schedText}
+                        </p>
+                      );
+                    })}
+                  </div>
+                  <p className="text-sm text-[#57534E] mt-2">
+                    Next step helps you pick — "not sure" is a fine answer there too.
+                  </p>
+                </div>
+              )}
+            </>,
+          )}
+
+        {intakeStep === 'agent' &&
+          card(
+            <>
+              <h2 className="font-medium text-[#1C1917] mb-2">Which helper takes this project?</h2>
               <p className={helpCls}>
                 {onboarding?.assistantProduct
                   ? `Your default is ${agentName(onboarding.assistantProduct)}. Keep it, or give this project a different helper.`
                   : 'Pick the AI helper for this project. Not sure is a fine answer — setup starts with Meta Muse guidance and nothing is blocked.'}
               </p>
-              <div className="space-y-2">
+              <div className="space-y-2 mb-5">
                 {AGENT_OPTIONS.map((a) => (
                   <label
                     key={a.id}
@@ -949,23 +1489,49 @@ export const OnboardingView: React.FC<{
                   </label>
                 ))}
               </div>
-            </>,
-          )}
 
-        {intakeStep === 'layer' &&
-          card(
-            <>
-              <h2 className="font-medium text-[#1C1917] mb-2">
-                Setting up with {agentName(product)}
-              </h2>
+              <h2 className="font-medium text-[#1C1917] mb-2">And your plan with them?</h2>
+              <div className="space-y-2 mb-4">
+                {PLAN_OPTIONS.map((p) => (
+                  <label
+                    key={p.id}
+                    className="flex items-center gap-2 text-sm text-[#1C1917] bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg px-3 py-2 cursor-pointer"
+                  >
+                    <input
+                      type="radio"
+                      name="intake-plan"
+                      checked={planChoice === p.id}
+                      onChange={() => {
+                        setPlanChoice(p.id);
+                        setSlot('__plan', p.id);
+                      }}
+                    />
+                    {p.name}
+                  </label>
+                ))}
+              </div>
+
+              {layer && fitLines.length > 0 && (
+                <div className="rounded-lg bg-[#FBF9F5] border border-[#E6DFD3] px-3 py-2.5 mb-4">
+                  <p className="text-sm font-medium text-[#1C1917] mb-1">
+                    What that means for this project
+                  </p>
+                  <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-0.5">
+                    {fitLines.map((l, i) => (
+                      <li key={i}>{l}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {product === 'gemini' && (
-                <div className="mb-3 rounded-lg border border-[#E6DFD3] bg-[#FBF9F5] px-3 py-2.5">
+                <div className="rounded-lg border border-[#E6DFD3] bg-[#FBF9F5] px-3 py-2.5">
                   <p className="text-sm font-medium text-[#1C1917] mb-1">
                     One quick thing that changes this setup
                   </p>
                   <p className={helpCls}>
-                    Is the Google account you'll use here a personal one, or a work or school
-                    one? They don't offer the same things.
+                    Is the Google account you'll use here a personal one, or a work or school one?
+                    They don't offer the same things.
                   </p>
                   <div className="space-y-2 mt-2">
                     {(
@@ -993,340 +1559,247 @@ export const OnboardingView: React.FC<{
                       Personal account: your helper lives in a <strong>skill</strong> (Google is
                       retiring Gems on personal accounts this December), and skills need "Keep
                       Activity" turned on in your Google settings. Anything your helper does on a
-                      schedule needs Google AI Plus — the steps below assume the free plan unless
+                      schedule needs Google AI Plus — your steps will assume the free plan unless
                       they say otherwise.
                     </p>
                   )}
                   {geminiAccountType === 'work' && (
                     <p className="text-sm text-[#57534E] mt-2">
                       Work or school account: your organization's admin decides what's allowed.
-                      Connecting Gmail or Calendar may need their approval, Gemini's automatic
-                      Task mode isn't offered on work accounts, and Gems stay available there
-                      until at least March 2027. If a step below doesn't appear for you, it's
-                      usually an admin setting — not something you did wrong.
+                      Connecting Gmail or Calendar may need their approval, Gemini's automatic Task
+                      mode isn't offered on work accounts, and Gems stay available there until at
+                      least March 2027. If a step later doesn't appear for you, it's usually an
+                      admin setting — not something you did wrong.
                     </p>
                   )}
                 </div>
               )}
-              {layer ? (
-                <>
-                  {layer.setupFeature && (
-                    <p className="text-sm text-[#57534E] mb-2">
-                      <span className="font-medium text-[#1C1917]">The feature: </span>
-                      {layer.setupFeature}
-                      {layer.minimumPlan ? ` · Works on: ${layer.minimumPlan}` : ''}
-                    </p>
+            </>,
+          )}
+
+        {intakeStep === 'questions' &&
+          card(
+            <>
+              <h2 className="font-medium text-[#1C1917] mb-1">Make it yours</h2>
+              <p className={helpCls}>
+                A few quick questions — {answeredCount} of {questions.length} answered. Short
+                answers are perfect; "not sure" always works.
+              </p>
+
+              <div className="space-y-4 mb-4">
+                {questions.slice(0, qIndex).map((q) =>
+                  (slots[q.id] || '').trim() ? (
+                    <div key={q.id}>
+                      <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg px-3 py-2 text-sm text-[#57534E] mb-1.5">
+                        {q.prompt}
+                      </div>
+                      <div className="flex justify-end">
+                        <div className="bg-[#405D1A] text-white rounded-lg px-3 py-2 text-sm max-w-[85%]">
+                          {slots[q.id]}
+                          {(slots[`${q.id}__followup`] || '').trim() &&
+                            ` — ${slots[`${q.id}__followup`]}`}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null,
+                )}
+              </div>
+
+              {currentQ && (
+                <div>
+                  <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg px-3 py-2.5 text-sm text-[#1C1917] mb-3">
+                    {currentQ.prompt}
+                  </div>
+                  {renderQuestionControls(currentQ)}
+                  {followUpApplies(currentQ) && currentAnswered && (
+                    <div className="mt-3">
+                      <p className="text-sm text-[#57534E] mb-1">{currentQ.followUp!.prompt}</p>
+                      <input
+                        className={inputCls}
+                        value={slots[`${currentQ.id}__followup`] || ''}
+                        onChange={(e) => setSlot(`${currentQ.id}__followup`, e.target.value)}
+                        onBlur={() =>
+                          void persistIntake(intakeStep as IntakeStep, slots, assistantChoice)
+                        }
+                        placeholder="Optional — a sentence is plenty"
+                      />
+                    </div>
                   )}
-                  {layer.setupPath && (
-                    <p className="text-sm text-[#57534E] mb-3 whitespace-pre-wrap">
-                      {layer.setupPath}
-                    </p>
-                  )}
-                  {layer.memberSteps && layer.memberSteps.length > 0 && (
-                    <>
-                      <h3 className="text-sm font-medium text-[#1C1917] mb-1">Your steps</h3>
-                      <ol className="text-sm text-[#57534E] list-decimal pl-5 space-y-1 mb-3">
-                        {layer.memberSteps.map((s, i) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ol>
-                    </>
-                  )}
-                  {layer.willDo && layer.willDo.length > 0 && (
-                    <>
-                      <h3 className="text-sm font-medium text-[#1C1917] mb-1">
-                        {agentName(product)} will
-                      </h3>
-                      <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-1 mb-3">
-                        {layer.willDo.map((w, i) => (
-                          <li key={i}>{layerClaimText(w)}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                  {layer.wontDo && layer.wontDo.length > 0 && (
-                    <>
-                      <h3 className="text-sm font-medium text-[#1C1917] mb-1">
-                        {agentName(product)} won't
-                      </h3>
-                      <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-1 mb-3">
-                        {layer.wontDo.map((w, i) => (
-                          <li key={i}>{layerClaimText(w)}</li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                  {layer.fallback && (
-                    <p className="text-sm text-[#57534E]">
-                      <span className="font-medium text-[#1C1917]">If it forgets: </span>
-                      {layer.fallback}
-                    </p>
-                  )}
-                  {layer.basis && (
-                    <p className="text-xs text-[#78716C] mt-3">{layer.basis}</p>
-                  )}
-                </>
-              ) : layerText ? (
-                <p className="text-sm text-[#57534E] whitespace-pre-wrap">{layerText}</p>
-              ) : (
-                <p className="text-sm text-[#57534E]">
-                  The step-by-step setup for {agentName(product)} is still being written, so here's
-                  the plain version that works everywhere: when you start a session with your
-                  helper, paste your project's rules (you'll confirm them in the last step) at the
-                  top, then tell it today's task. Your project here keeps the rules saved either
-                  way.
+                  <div className="flex flex-wrap items-center gap-2 mt-4">
+                    {qIndex > 0 && (
+                      <button
+                        type="button"
+                        className={ghostBtn}
+                        onClick={() => setQIndex(qIndex - 1)}
+                      >
+                        <ArrowLeft className="w-4 h-4" /> Previous question
+                      </button>
+                    )}
+                    {!currentAnswered && defaultAnswer(currentQ) && (
+                      <button
+                        type="button"
+                        className={ghostBtn}
+                        onClick={() => void answerQuestion(currentQ, defaultAnswer(currentQ))}
+                      >
+                        Not sure — pick for me
+                      </button>
+                    )}
+                    {!currentAnswered && !currentQ.required && (
+                      <button type="button" className={ghostBtn} onClick={advanceQuestion}>
+                        Skip
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={primaryBtn}
+                      disabled={!canAdvance}
+                      onClick={advanceQuestion}
+                    >
+                      {returnToReview
+                        ? 'Back to review'
+                        : qIndex >= questions.length - 1
+                          ? 'Review my project'
+                          : 'Continue'}{' '}
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                    {!canAdvance && (
+                      <span className="text-sm text-[#78716C]">
+                        Answer this one to continue — or use "Not sure".
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-6 rounded-lg border border-[#E6DFD3] bg-white px-3 py-2.5">
+                <p className="text-xs font-medium uppercase tracking-wide text-[#78716C] mb-1">
+                  Your project so far
                 </p>
-              )}
-            </>,
-          )}
-
-        {intakeStep === 'slots' &&
-          card(
-            <>
-              <h2 className="font-medium text-[#1C1917] mb-2">Make it yours</h2>
-              <p className={helpCls}>
-                These started from the template — change any of it. Your words are what your helper
-                will actually work from.
-              </p>
-              <div className="space-y-4">
-                <div>
-                  <label className={labelCls} htmlFor="slot-goal">
-                    The goal, in your words
-                  </label>
-                  <textarea
-                    id="slot-goal"
-                    className={inputCls}
-                    rows={3}
-                    value={slots.goal || ''}
-                    onChange={(e) => setSlot('goal', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="slot-specifics">
-                    Anything specific your helper should know?
-                  </label>
-                  <p className={helpCls}>
-                    Places, people, dates, preferences — whatever makes this yours. Fine to leave
-                    blank.
+                <p className="text-sm text-[#1C1917] mb-1">
+                  {composed.contract.goal.split('\n\nDetails from me:')[0] || 'Your goal will appear here.'}
+                </p>
+                {composed.checkInRhythm && (
+                  <p className="text-sm text-[#57534E]">When: {composed.checkInRhythm}</p>
+                )}
+                {composed.memberNotes && (
+                  <p className="text-sm text-[#57534E] whitespace-pre-wrap">
+                    Your notes: {composed.memberNotes}
                   </p>
-                  <textarea
-                    id="slot-specifics"
-                    className={inputCls}
-                    rows={3}
-                    value={slots.specifics || ''}
-                    onChange={(e) => setSlot('specifics', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="slot-done">
-                    What does "done" look like?
-                  </label>
-                  <textarea
-                    id="slot-done"
-                    className={inputCls}
-                    rows={2}
-                    value={slots.done || ''}
-                    onChange={(e) => setSlot('done', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="slot-rhythm">
-                    How should your helper check in with you?
-                  </label>
-                  <textarea
-                    id="slot-rhythm"
-                    className={inputCls}
-                    rows={2}
-                    value={slots.rhythm || ''}
-                    onChange={(e) => setSlot('rhythm', e.target.value)}
-                  />
-                </div>
+                )}
               </div>
             </>,
           )}
 
-        {intakeStep === 'guardrails' &&
+        {intakeStep === 'review' &&
           card(
             <>
               <h2 className="font-medium text-[#1C1917] mb-2 flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4" /> Your guardrails
+                <ShieldCheck className="w-4 h-4" /> Here's your project
               </h2>
               <p className={helpCls}>
-                This is the agreement your helper works under. Read each line — edit anything.
-                Nothing is saved as your project until you confirm these are right.
+                This card is the whole agreement — it's exactly what your helper will work from.
+                Tap Edit on any row to change that answer.
               </p>
-              <div className="space-y-4">
-                <div>
-                  <label className={labelCls} htmlFor="g-do">
-                    Your helper will
-                  </label>
-                  <textarea
-                    id="g-do"
-                    className={inputCls}
-                    rows={3}
-                    value={slots.g_do || ''}
-                    onChange={(e) => setSlot('g_do', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="g-do-not">
-                    Your helper will not
-                  </label>
-                  <textarea
-                    id="g-do-not"
-                    className={inputCls}
-                    rows={3}
-                    value={slots.g_do_not || ''}
-                    onChange={(e) => setSlot('g_do_not', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="g-ask">
-                    Ask me before
-                  </label>
-                  <textarea
-                    id="g-ask"
-                    className={inputCls}
-                    rows={2}
-                    value={slots.g_ask || ''}
-                    onChange={(e) => setSlot('g_ask', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="g-report">
-                    Report back
-                  </label>
-                  <textarea
-                    id="g-report"
-                    className={inputCls}
-                    rows={2}
-                    value={slots.g_report || ''}
-                    onChange={(e) => setSlot('g_report', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls} htmlFor="g-stop">
-                    Stop and ask me if
-                  </label>
-                  <textarea
-                    id="g-stop"
-                    className={inputCls}
-                    rows={2}
-                    value={slots.g_stop || ''}
-                    onChange={(e) => setSlot('g_stop', e.target.value)}
-                  />
-                </div>
-                <label className="flex items-start gap-2 text-sm text-[#1C1917] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5"
-                    checked={confirmed}
-                    onChange={(e) => setConfirmed(e.target.checked)}
-                  />
-                  These guardrails are right. Save my project and start at rung 0 — my helper
-                  suggests, I approve, nothing happens without me.
-                </label>
-                {saveError && <p className="text-sm text-[#991B1B]">{saveError}</p>}
+              <div className="mb-4">
+                {reviewRow('When', composed.whenText || 'When you start it', firstQidFor('schedule'))}
+                {reviewRow(
+                  'Covers',
+                  composed.goalAdditions.length
+                    ? composed.goalAdditions.join(' ')
+                    : composed.contract.goal.split('\n\nDetails from me:')[0],
+                  firstQidFor('goal'),
+                )}
+                {reviewRow(
+                  'Skips',
+                  composed.sectionAdditions.do_not.join('\n') || 'Nothing skipped',
+                  firstQidFor('do_not'),
+                )}
+                {reviewRow('Always', composed.contract.do, firstQidFor('do'))}
+                {reviewRow('Never', composed.contract.do_not, firstQidFor('do_not'))}
+                {reviewRow('Asks you first', composed.contract.ask_me_before, firstQidFor('ask_me_before'))}
+                {reviewRow('Stops if', composed.contract.stop_if, firstQidFor('stop_if'))}
+                {reviewRow('Check-ins', composed.checkInRhythm, firstQidFor('schedule'))}
+                {composed.memberNotes &&
+                  reviewRow('Your notes (shared as information, not instructions)', composed.memberNotes)}
               </div>
-            </>,
-          )}
 
-        {intakeStep === 'closing' &&
-          card(
-            <>
-              <h2 className="font-medium text-[#1C1917] mb-2 flex items-center gap-2">
-                <Sparkles className="w-4 h-4" /> Your project is set up
-              </h2>
-              <p className="text-sm text-[#57534E] mb-3">
-                <span className="font-medium text-[#1C1917]">
-                  {activeProject.title || template?.title || 'Your project'}
-                </span>{' '}
-                is active at rung 0 with {agentName(product)}: your helper suggests and drafts,
-                you approve everything.
-              </p>
-              <h3 className="text-sm font-medium text-[#1C1917] mb-1">Your first step (10 minutes)</h3>
-              <p className="text-sm text-[#57534E] mb-3">
-                {template?.steps && template.steps.length > 0
-                  ? template.steps[0]
-                  : `Open ${agentName(product)}, paste your project rules from the project page, and tell it the goal in your own words.`}
-              </p>
-              <h3 className="text-sm font-medium text-[#1C1917] mb-1">How this works</h3>
-              <ul className="text-sm text-[#57534E] list-disc pl-5 space-y-1 mb-3">
-                <li>Your project page keeps the goal and guardrails — your helper works from them.</li>
-                <li>
-                  Check-ins follow the rhythm you set
-                  {slots.rhythm ? `: ${slots.rhythm}` : '.'}
-                </li>
-                <li>As trust builds, you can raise the rung — only you can, only here in the app.</li>
-                <li>Questions any time: ask the guide here, or message Nic from your plan page.</li>
-              </ul>
+              <div className="rounded-lg bg-[#FBF9F5] border border-[#E6DFD3] px-3 py-2.5 mb-4">
+                <p className="text-sm font-medium text-[#1C1917] mb-1">How much freedom?</p>
+                <div className="flex items-center gap-1.5 mb-1.5" aria-hidden>
+                  {[0, 1, 2, 3].map((r) => (
+                    <span
+                      key={r}
+                      className={`w-2.5 h-2.5 rounded-full ${r === 0 ? 'bg-[#14532D]' : 'bg-[#E6DFD3] border border-[#D6CEBE]'}`}
+                    />
+                  ))}
+                </div>
+                <p className="text-sm text-[#57534E]">
+                  You start at rung 0: your helper suggests and drafts, you approve everything,
+                  nothing happens without you. Only you can raise the rung, later, here in the app.
+                </p>
+              </div>
+
+              <label className="flex items-start gap-2 text-sm text-[#1C1917] cursor-pointer mb-3">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={confirmed}
+                  onChange={(e) => setConfirmed(e.target.checked)}
+                />
+                This looks right. Save my project at rung 0 — my helper suggests, I approve,
+                nothing happens without me.
+              </label>
+              {saveError && <p className="text-sm text-[#991B1B]">{saveError}</p>}
               {template?.audience === 'business' && (
-                <div className="bg-[#FBF9F5] border border-[#E6DFD3] rounded-lg p-4 mb-3">
-                  <p className="text-sm text-[#57534E]">
-                    One offer, not a requirement: Nic likes to do a quick intro session with
-                    business members, so everything is thought through and questions get answered
-                    early. You can start building right now — book Nic whenever it suits you, or
-                    not at all.
-                  </p>
-                  <a
-                    href={bookingUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={ghostBtn + ' mt-2'}
-                  >
-                    <Calendar className="w-4 h-4" /> Book a quick intro with Nic
-                  </a>
-                </div>
+                <p className="text-sm text-[#57534E] mt-2">
+                  One note for business plans: Nic likes to do a quick intro session with business
+                  members — encouraged, never required. You can start building the moment this is
+                  saved, and book him whenever it suits you from your plan page.
+                </p>
               )}
               {activeProject.sessionFirst && (
-                <p className="text-sm text-[#57534E] mb-3">
-                  And your session with Nic: if you haven't booked it yet, it's the centerpiece of
-                  your package —{' '}
-                  <a className="underline" href={bookingUrl} target="_blank" rel="noreferrer">
-                    book it here
-                  </a>
-                  . Your project is ready either way.
+                <p className="text-sm text-[#57534E] mt-2">
+                  Your session with Nic is the centerpiece of your package — book it any time from
+                  the first setup step. This project saves either way; booking is never a gate.
                 </p>
               )}
-              <div className="flex flex-wrap gap-2">
-                <button onClick={onClose} className={primaryBtn}>
-                  <Check className="w-4 h-4" /> Back to my projects
-                </button>
-                <button
-                  onClick={() => setPhase('picker')}
-                  className={ghostBtn}
-                >
-                  Start another project
-                </button>
-              </div>
             </>,
           )}
 
-        {intakeStep !== 'closing' && (
-          <div className="flex items-center gap-2">
-            {stepIdx > 0 && (
-              <button onClick={intakeBack} className={ghostBtn}>
-                <ArrowLeft className="w-4 h-4" /> Back
-              </button>
-            )}
-            {intakeStep !== 'guardrails' ? (
-              <button onClick={intakeNext} className={primaryBtn}>
-                Continue <ArrowRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button
-                onClick={saveContract}
-                disabled={!confirmed || !(slots.goal || '').trim() || saving}
-                className={primaryBtn}
-              >
-                {saving ? 'Saving…' : 'Save my project'} <Check className="w-4 h-4" />
-              </button>
-            )}
-            {intakeStep === 'guardrails' && !(slots.goal || '').trim() && (
-              <span className="text-sm text-[#78716C]">Add a goal (previous step) to save.</span>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {stepIdx > 0 && intakeStep !== 'questions' && (
+            <button
+              onClick={() => void goIntakeStep(INTAKE_STEPS[stepIdx - 1])}
+              className={ghostBtn}
+            >
+              <ArrowLeft className="w-4 h-4" /> Back
+            </button>
+          )}
+          {stepIdx > 0 && intakeStep === 'questions' && qIndex === 0 && (
+            <button onClick={() => void goIntakeStep('agent')} className={ghostBtn}>
+              <ArrowLeft className="w-4 h-4" /> Back
+            </button>
+          )}
+          {intakeStep === 'overview' && (
+            <button onClick={() => void goIntakeStep('agent')} className={primaryBtn}>
+              Begin customizing <ArrowRight className="w-4 h-4" />
+            </button>
+          )}
+          {intakeStep === 'agent' && (
+            <button onClick={() => void goIntakeStep('questions')} className={primaryBtn}>
+              Continue <ArrowRight className="w-4 h-4" />
+            </button>
+          )}
+          {intakeStep === 'review' && (
+            <button
+              onClick={saveContract}
+              disabled={!confirmed || saving}
+              className={primaryBtn}
+            >
+              {saving ? 'Saving…' : 'Save my project'} <Check className="w-4 h-4" />
+            </button>
+          )}
+        </div>
 
         <p className="text-xs text-[#78716C] mt-6 flex items-center gap-1">
           <MessageCircle className="w-3.5 h-3.5" /> Stuck, or something looks wrong? Email Nic at
