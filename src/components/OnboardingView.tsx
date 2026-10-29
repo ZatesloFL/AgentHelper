@@ -95,9 +95,13 @@ export const OnboardingView: React.FC<{
   projects: Record<string, UserProjectDoc>;
   bookingUrl: string;
   initialProjectId?: string | null;
+  // Sidebar entries (2026-10-29): a Recommended card jumps straight into
+  // starting that template; the gallery opens on the picker directly.
+  initialTemplateSlug?: string | null;
+  startAtPicker?: boolean;
   onClose: () => void;
   onProjectsChanged: (projects: Record<string, UserProjectDoc>) => void;
-}> = ({ user, projects, bookingUrl, initialProjectId, onClose, onProjectsChanged }) => {
+}> = ({ user, projects, bookingUrl, initialProjectId, initialTemplateSlug, startAtPicker, onClose, onProjectsChanged }) => {
   const [phase, setPhase] = useState<Phase>('loading');
   const [noticeText, setNoticeText] = useState<string>('');
   const [onboarding, setOnboarding] = useState<MemberOnboardingDoc | null>(null);
@@ -212,6 +216,29 @@ export const OnboardingView: React.FC<{
           await beginIntake(project, map);
           return;
         }
+      }
+      if (initialTemplateSlug) {
+        const tpl = tpls.find((t) => t.slug === initialTemplateSlug);
+        if (tpl) {
+          const existing = map[tpl.slug];
+          if (existing && existing.status === 'needs_setup') {
+            await beginIntake(existing, map);
+            return;
+          }
+          if (existing) {
+            setNoticeText(
+              `"${existing.title || tpl.title}" is already set up on your account. You can open it from your projects.`,
+            );
+            setPhase('notice');
+            return;
+          }
+          await startTemplateProject(tpl);
+          return;
+        }
+      }
+      if (startAtPicker) {
+        setPhase('picker');
+        return;
       }
       if (ob && !ob.completed) {
         setPhase('general');
@@ -691,7 +718,9 @@ export const OnboardingView: React.FC<{
     return (
       <div className="min-h-screen bg-[#FBF9F5] px-4 sm:px-6 py-8">
         <div className="max-w-3xl mx-auto">
-          {header('Start a project', 'Pick a ready-made project, or start from your own idea.')}
+          {startAtPicker
+            ? header('Project gallery', 'Every ready-made project, plus your own idea. Start anything.')
+            : header('Start a project', 'Pick a ready-made project, or start from your own idea.')}
 
           {waitingProjects.length > 0 && (
             <>

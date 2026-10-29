@@ -31,6 +31,7 @@ import {
   updateUserProjectStatus,
   updateUserProjectFields,
   listTemplates,
+  createBlankProject,
   deleteUserProject,
   UserProjectDoc,
   TaskContractFields,
@@ -69,6 +70,8 @@ import { ToolsProfileModal, ToolsCatalogData } from './components/ToolsProfileMo
 import { AdminView } from './components/AdminView.js';
 import { PlanView } from './components/PlanView.js';
 import { OnboardingView } from './components/OnboardingView.js';
+import { listTemplatesWithFallback } from './lib/templates.js';
+import type { TemplateDoc } from './lib/firebase.js';
 import { InstructionLinkCard, TemplateUpdateNotice } from './components/ProjectExtras.js';
 import { LoginModal } from './components/LoginModal.js';
 import {
@@ -192,6 +195,12 @@ export default function App() {
   // Track 4 MVP: latest published template versions (Firestore), used to
   // show the per-project "newer version available" notice.
   const [templateVersions, setTemplateVersions] = useState<Record<string, number>>({});
+  // Template catalog (Firestore-first, bundled fallback) for the sidebar's
+  // Recommended section and version checks.
+  const [templatesCatalog, setTemplatesCatalog] = useState<TemplateDoc[]>([]);
+  // Sidebar deep-links into setup: start one template, or open the gallery.
+  const [setupTemplateSlug, setSetupTemplateSlug] = useState<string | null>(null);
+  const [setupAtPicker, setSetupAtPicker] = useState<boolean>(false);
   const [userAudits, setUserAudits] = useState<AuditRunDoc[]>([]);
   const [shareCorrectionsWithNic, setShareCorrectionsWithNic] = useState<boolean>(false);
   const [showCalendarReminderModal, setShowCalendarReminderModal] = useState<boolean>(false);
@@ -533,16 +542,20 @@ export default function App() {
     );
   }, []);
 
-  // Track 4 MVP: refresh latest template versions whenever the user changes
+  // Track 4 MVP: refresh the template catalog + latest versions whenever
+  // the user changes (Firestore-first with bundled fallback, so the
+  // sidebar's recommendations match what setup can actually start)
   useEffect(() => {
     if (!user) {
       setTemplateVersions({});
+      setTemplatesCatalog([]);
       return;
     }
     let cancelled = false;
-    listTemplates()
+    listTemplatesWithFallback()
       .then((templates) => {
         if (cancelled) return;
+        setTemplatesCatalog(templates);
         const map: Record<string, number> = {};
         for (const t of templates) map[t.slug] = t.version;
         setTemplateVersions(map);
@@ -1661,6 +1674,43 @@ export default function App() {
     }
   };
 
+  // Sidebar: standing "Create your own" — make the blank project now and
+  // walk straight into its setup.
+  const handleCreateOwnProject = async () => {
+    if (!user) return;
+    try {
+      const id = await createBlankProject(user.uid, { startedAs: 'blank' });
+      const map = await getUserProjects(user.uid);
+      setUserProjectsMap(map);
+      userProjectsMapRef.current = map;
+      if (id) {
+        setSetupProjectId(id);
+        setSetupTemplateSlug(null);
+        setSetupAtPicker(false);
+        setIsSetupView(true);
+        window.history.pushState({}, '', '/setup');
+      }
+    } catch (err: any) {
+      setLiveError(err?.message || "I couldn't start a blank project just now. Try again in a moment.");
+    }
+  };
+
+  const openSetupForTemplate = (slug: string) => {
+    setSetupProjectId(null);
+    setSetupTemplateSlug(slug);
+    setSetupAtPicker(false);
+    setIsSetupView(true);
+    window.history.pushState({}, '', '/setup');
+  };
+
+  const openProjectGallery = () => {
+    setSetupProjectId(null);
+    setSetupTemplateSlug(null);
+    setSetupAtPicker(true);
+    setIsSetupView(true);
+    window.history.pushState({}, '', '/setup');
+  };
+
   // Track 4 MVP: template-update notice choices. "Use new version" re-pins
   // the project to the newer template version (saved contract untouched);
   // "Not now" records the dismissal for that version only.
@@ -1750,9 +1800,13 @@ export default function App() {
         projects={userProjectsMap}
         bookingUrl={bookingUrl}
         initialProjectId={setupProjectId}
+        initialTemplateSlug={setupTemplateSlug}
+        startAtPicker={setupAtPicker}
         onClose={() => {
           setIsSetupView(false);
           setSetupProjectId(null);
+          setSetupTemplateSlug(null);
+          setSetupAtPicker(false);
           window.history.pushState({}, '', '/');
         }}
         onProjectsChanged={(map) => {
@@ -2640,11 +2694,92 @@ export default function App() {
               </div>
             )}
 
+            {/* Recommended for you: catalog templates this member hasn't
+                started yet (their own projects come from the database
+                above; these come from the template catalog) */}
+            {user &&
+              (() => {
+                const started = new Set(
+                  (Object.values(userProjectsMap) as UserProjectDoc[])
+                    .map((p) => p.templateSlug)
+                    .filter(Boolean) as string[],
+                );
+                const starterOrder = ['trip-planner', 'family-scheduler', 'daily-news-podcast'];
+                const recommended = templatesCatalog
+                  .filter((t) => !started.has(t.slug))
+                  .sort((a, b) => {
+                    const ai = starterOrder.indexOf(a.slug);
+                    const bi = starterOrder.indexOf(b.slug);
+                    if (ai !== -1 || bi !== -1)
+                      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                    return a.title.localeCompare(b.title);
+                  })
+                  .slice(0, 3);
+                if (recommended.length === 0) return null;
+                return (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between border-b border-[#E6DFD3] pb-1">
+                      <h4 className="text-xs font-mono uppercase tracking-wider font-semibold text-[#57534E]">
+                        Recommended for you
+                      </h4>
+                    </div>
+                    {recommended.map((t) => (
+                      <div
+                        key={t.slug}
+                        className="p-3.5 bg-white border border-[#E6DFD3] hover:border-[#D6CEBE] rounded-xl text-xs space-y-2 shadow-2xs"
+                      >
+                        <h5 className="font-semibold text-sm text-[#1C1917] leading-snug">
+                          {t.title}
+                        </h5>
+                        {t.goalInOneSentence && (
+                          <p className="text-[11px] text-[#57534E] leading-relaxed line-clamp-2">
+                            {t.goalInOneSentence}
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openSetupForTemplate(t.slug)}
+                          className="px-3 py-1.5 rounded-lg bg-[#405D1A] hover:bg-[#365013] text-white text-[11px] font-semibold transition-colors"
+                        >
+                          Start this project →
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+            {/* Project gallery + Create your own: standing entries */}
+            {user && (
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={openProjectGallery}
+                  className="w-full p-3.5 bg-white border border-[#E6DFD3] hover:border-[#D6CEBE] rounded-xl text-left shadow-2xs transition-all"
+                >
+                  <span className="block text-sm font-semibold text-[#1C1917]">See all projects</span>
+                  <span className="block text-[11px] text-[#57534E] mt-0.5">
+                    Browse the full gallery of ready-made projects.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCreateOwnProject()}
+                  className="w-full p-3.5 bg-white border border-dashed border-[#B8AE97] hover:border-[#405D1A] rounded-xl text-left shadow-2xs transition-all"
+                >
+                  <span className="block text-sm font-semibold text-[#1C1917]">Create your own</span>
+                  <span className="block text-[11px] text-[#57534E] mt-0.5">
+                    Your own idea, in your own words — the guide shapes it into a project with you.
+                  </span>
+                </button>
+              </div>
+            )}
+
             {(
               [
                 { type: 'setup', label: 'Start here' },
-                { type: 'project', label: 'Projects' },
                 { type: 'checkup', label: 'Check-ups' },
+                { type: 'project', label: 'Projects' },
                 { type: 'support', label: 'Help' },
               ] as const
             ).map(group => {
