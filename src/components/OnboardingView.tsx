@@ -40,6 +40,7 @@ const AGENT_OPTIONS = [
   { id: 'grok', name: 'Grok' },
   { id: 'chatgpt', name: 'ChatGPT' },
   { id: 'gemini', name: 'Google Gemini' },
+  { id: 'claude', name: 'Claude' },
   { id: 'unsure', name: 'Not sure yet' },
 ];
 
@@ -1171,7 +1172,7 @@ export const OnboardingView: React.FC<{
     setIntakeStep('questions');
   };
 
-  const fitAgents = ['muse', 'grok', 'chatgpt', 'gemini'];
+  const fitAgents = ['muse', 'grok', 'chatgpt', 'gemini', 'claude'];
   const warnings = capabilityWarnings(template, layer);
   const fitLines = planFitLines(layer, planChoice);
 
