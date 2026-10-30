@@ -5,6 +5,12 @@ import {
   GoogleAuthProvider,
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
   User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -569,7 +575,107 @@ export const authService = {
   async signOut(): Promise<void> {
     await firebaseSignOut(auth);
   },
+
+  // --- Email sign-in (spec: files/sign-in-expansion-spec.md; built 2026-10-29
+  // on Nic's go). Requires the Email/Password provider + email link enabled in
+  // the Firebase console; until then these reject with operation-not-allowed,
+  // which the sign-in screen translates into plain language. ---
+
+  async signInWithEmail(email: string, password: string): Promise<AuthUser> {
+    const result = await signInWithEmailAndPassword(auth, email.trim(), password);
+    const u = result.user;
+    return {
+      uid: u.uid,
+      displayName: u.displayName || u.email?.split('@')[0] || 'Friend',
+      email: u.email,
+      photoURL: u.photoURL,
+    };
+  },
+
+  async createWithEmail(email: string, password: string): Promise<AuthUser> {
+    const result = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    const u = result.user;
+    return {
+      uid: u.uid,
+      displayName: u.displayName || u.email?.split('@')[0] || 'Friend',
+      email: u.email,
+      photoURL: u.photoURL,
+    };
+  },
+
+  async resetPassword(email: string): Promise<void> {
+    await sendPasswordResetEmail(auth, email.trim());
+  },
+
+  async sendMagicLink(email: string): Promise<void> {
+    const clean = email.trim();
+    await sendSignInLinkToEmail(auth, clean, {
+      url: window.location.origin + '/',
+      handleCodeInApp: true,
+    });
+    try {
+      window.localStorage.setItem('sl-signin-email', clean);
+    } catch {}
+  },
+
+  isMagicLinkUrl(url: string): boolean {
+    try {
+      return isSignInWithEmailLink(auth, url);
+    } catch {
+      return false;
+    }
+  },
+
+  storedSignInEmail(): string | null {
+    try {
+      return window.localStorage.getItem('sl-signin-email');
+    } catch {
+      return null;
+    }
+  },
+
+  async completeMagicLink(email: string, url: string): Promise<AuthUser> {
+    const result = await signInWithEmailLink(auth, email.trim(), url);
+    try {
+      window.localStorage.removeItem('sl-signin-email');
+    } catch {}
+    const u = result.user;
+    return {
+      uid: u.uid,
+      displayName: u.displayName || u.email?.split('@')[0] || 'Friend',
+      email: u.email,
+      photoURL: u.photoURL,
+    };
+  },
 };
+
+/** Plain-language messages for Firebase Auth error codes (sign-in screen). */
+export function friendlyAuthError(err: any): string {
+  const code = String(err?.code || '');
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'That email address does not look complete — check it and try again.';
+    case 'auth/user-not-found':
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+      return 'No match for that email and password. If you are new, create an account — or use the email link instead.';
+    case 'auth/email-already-in-use':
+      return 'That email already has an account. Try signing in, or use the email link — with account linking on, it lands in the same account.';
+    case 'auth/weak-password':
+      return 'That password is too short — use at least 6 characters; longer is better.';
+    case 'auth/operation-not-allowed':
+      return 'Email sign-in is not switched on for Second Look yet. Google sign-in works — and Nic can enable email sign-in in a couple of clicks.';
+    case 'auth/too-many-requests':
+      return 'Too many tries in a row — wait a few minutes and try again.';
+    case 'auth/expired-action-code':
+    case 'auth/invalid-action-code':
+      return 'That sign-in link has expired or was already used. Request a fresh one below.';
+    case 'auth/unauthorized-domain':
+      return 'This address is not authorized for sign-in. Open app.getasecondlook.co directly.';
+    default:
+      return err?.message || 'Something did not work. Please try again.';
+  }
+}
 
 /**
  * Consent persistence with version check (consentVersion = 2)

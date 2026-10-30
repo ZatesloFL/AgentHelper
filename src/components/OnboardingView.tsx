@@ -32,7 +32,7 @@ import { getTemplateWithFallback, listTemplatesWithFallback } from '../lib/templ
 // Paths: Template in Hand, Open Start, Brainstorm First, Gift Arrival.
 // Lanes: membership (default), virtual, lunch — set from the purchase and
 // carried on the onboarding record / project. Onboarding lives in the app
-// only; AI Nic's job ends at the code + link. Guardrail confirmation is a
+// only; the guide's job ends at the code + link. Guardrail confirmation is a
 // hard gate: nothing is saved as a contract before the member confirms.
 
 const AGENT_OPTIONS = [
