@@ -416,7 +416,7 @@ export const PlanView: React.FC<{
           </div>
           <p className="text-sm text-[#57534E] mt-3">
             Your name and email come from your Google account and can't be changed here. For billing
-            questions, contact Nic at nic@zateslo.com.
+            questions, contact Nic at hello@getasecondlook.co.
           </p>
         </div>
       </div>

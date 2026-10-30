@@ -584,7 +584,7 @@ export const OnboardingView: React.FC<{
         await beginIntake(project, map);
       } else {
         setNoticeText(
-          'Something hiccuped starting your project. Nothing is lost — try again from Start setup, or email Nic at nic@zateslo.com.',
+          'Something hiccuped starting your project. Nothing is lost — try again from Start setup, or email Nic at hello@getasecondlook.co.',
         );
         setPhase('notice');
       }
@@ -829,8 +829,8 @@ export const OnboardingView: React.FC<{
                   </ul>
                   <p className="text-sm text-[#57534E]">
                     Questions at any point? Email Nic at{' '}
-                    <a className="underline" href="mailto:nic@zateslo.com">
-                      nic@zateslo.com
+                    <a className="underline" href="mailto:hello@getasecondlook.co">
+                      hello@getasecondlook.co
                     </a>{' '}
                     — a person answers.
                   </p>
@@ -1101,8 +1101,8 @@ export const OnboardingView: React.FC<{
               <p className="text-sm text-[#57534E]">
                 We couldn't find the setup content for this project. Nothing you bought is lost —
                 email Nic at{' '}
-                <a className="underline" href="mailto:nic@zateslo.com">
-                  nic@zateslo.com
+                <a className="underline" href="mailto:hello@getasecondlook.co">
+                  hello@getasecondlook.co
                 </a>{' '}
                 and he will sort it out personally.
               </p>
@@ -1803,7 +1803,7 @@ export const OnboardingView: React.FC<{
 
         <p className="text-xs text-[#78716C] mt-6 flex items-center gap-1">
           <MessageCircle className="w-3.5 h-3.5" /> Stuck, or something looks wrong? Email Nic at
-          nic@zateslo.com — a person answers.
+          hello@getasecondlook.co — a person answers.
         </p>
       </div>
     </div>

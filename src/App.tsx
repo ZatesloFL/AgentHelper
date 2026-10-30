@@ -175,6 +175,9 @@ export default function App() {
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [liveError, setLiveError] = useState<string | null>(null);
   const [screenShareSupported, setScreenShareSupported] = useState<boolean>(true);
+  const [mobileNoteDismissed, setMobileNoteDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem('sl-mobile-note') === 'dismissed'; } catch { return false; }
+  });
   const [currentScreenFrame, setCurrentScreenFrame] = useState<string | null>(null);
 
   // Screen Share Consent Modal (Requested by agent)
@@ -1330,6 +1333,13 @@ export default function App() {
       }
       setLiveError(null);
       await clientRef.current.startLiveSession();
+      // Unified start (Nic, 2026-10-29): voice and screen share begin together
+      // by default — the share still goes through its consent prompt, and
+      // either can be stopped on its own afterwards.
+      if (screenShareSupported && !isScreenSharing) {
+        const ok = await clientRef.current.startScreenShare();
+        setIsScreenSharing(ok);
+      }
     }
   };
 
@@ -1968,6 +1978,30 @@ export default function App() {
         </div>
       </div>
 
+      {/* Mobile note (Nic, 2026-10-29): the app is desktop-first for setup;
+          on a phone, talk/projects/links work — say so plainly. */}
+      {!mobileNoteDismissed && (
+        <div className="lg:hidden mx-3 mt-3 rounded-xl border border-[#E6DFD3] bg-[#FBF3E4] px-4 py-3 flex items-start gap-3">
+          <p className="flex-1 text-[13px] leading-relaxed text-[#57534E]">
+            <span className="font-semibold text-[#1C1917]">On your phone?</span> You can talk
+            to your guide, check your projects, and open your brief links right here. For
+            hands-on setup, a laptop works best — your guide can see your screen in real
+            time and walk you through each click.
+          </p>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              setMobileNoteDismissed(true);
+              try { localStorage.setItem('sl-mobile-note', 'dismissed'); } catch {}
+            }}
+            className="text-[#A8A29E] hover:text-[#1C1917] text-lg leading-none px-1"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <div className="flex-1 max-w-7xl w-full mx-auto flex flex-col lg:flex-row overflow-hidden">
         {/* Chat / Conversation Panel */}
@@ -2270,7 +2304,7 @@ export default function App() {
                           ? 'Connecting Voice...'
                           : !liveAvailable
                           ? 'Voice Unavailable'
-                          : 'Start Voice Chat'}
+                          : 'Start Voice + Screen Share'}
                       </span>
                     </>
                   )}
