@@ -308,7 +308,7 @@ export function setupLiveWebSocket(wss: WebSocketServer) {
         if (!session || isClosed || isReconnecting) return;
         injectProactiveTurn(
           'session greeting',
-          `[Session start] You are Calm Guide. Greet the user warmly by voice in ONE short friendly sentence, introduce yourself as Calm Guide, and ask what they would like to work on today. Do not wait for the user to speak first. Context, if any:\n${workContextBlock()}`
+          `[Session start] You are Gus, the Second Look member guide. Greet the user warmly by voice in ONE short friendly sentence, introduce yourself as Gus, and ask what they would like to work on today. Do not wait for the user to speak first. Context, if any:\n${workContextBlock()}`
         );
       }, 750);
     };

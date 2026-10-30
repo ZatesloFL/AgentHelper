@@ -1786,7 +1786,7 @@ export default function App() {
   if (!authReady) {
     return (
       <div className="min-h-dvh bg-[#FBF9F5] text-[#1C1917] flex items-center justify-center font-sans">
-        <span className="text-xs text-[#78716C] font-mono">Loading Calm Guide...</span>
+        <span className="text-xs text-[#78716C] font-mono">Loading Second Look...</span>
       </div>
     );
   }
@@ -2071,7 +2071,7 @@ export default function App() {
                 >
                   <div className="flex items-center gap-1.5 mb-1 text-[11px] text-[#78716C]">
                     <span className="font-medium text-[#1C1917]">
-                      {isGuide ? 'Calm Guide' : user?.displayName || 'You'}
+                      {isGuide ? 'Gus' : user?.displayName || 'You'}
                     </span>
                     {m.source === 'spoken' && (
                       <span

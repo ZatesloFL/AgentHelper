@@ -50,7 +50,7 @@ export const TopNav: React.FC<TopNavProps> = ({
           href="/"
           className="text-lg sm:text-xl font-editorial font-medium tracking-wide text-[#1C1917] whitespace-nowrap shrink-0 hover:opacity-85 transition-opacity"
         >
-          Calm Guide
+          Second Look
         </a>
 
         {/* Product selector (hidden when only one product is enabled) */}

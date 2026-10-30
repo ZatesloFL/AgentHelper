@@ -261,7 +261,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
                   >
                     <div className="flex items-center justify-between text-[10px] opacity-75 mb-1 font-mono">
                       <span>
-                        {m.role === 'guide' ? 'Calm Guide' : m.role === 'system' ? 'System' : 'You'}{' '}
+                        {m.role === 'guide' ? 'Gus' : m.role === 'system' ? 'System' : 'You'}{' '}
                         {m.source ? `(${m.source})` : ''}
                       </span>
                       <span>{m.timestamp}</span>

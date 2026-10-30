@@ -197,7 +197,7 @@ export interface UserProjectDoc {
   sessionFirst?: boolean;
   intake?: ProjectIntakeState;
   // Track 2: a project created from a purchased template, before the
-  // Calm Guide intake (Track 3) turns it into a rung-0 contract. The
+  // Second Look intake (Track 3) turns it into a rung-0 contract. The
   // template doc is copied in, not linked, so the member's project keeps
   // working even if the template is later versioned.
   templateSlug?: string;

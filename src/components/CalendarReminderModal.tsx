@@ -107,7 +107,7 @@ export const CalendarReminderModal: React.FC<CalendarReminderModalProps> = ({
     const icsLines = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Calm Guide//Muse Weekly Check//EN',
+      'PRODID:-//Second Look//Muse Weekly Check//EN',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
       `X-WR-TIMEZONE:${userTimezone}`,
